@@ -171,7 +171,7 @@ All other functionality uses native browser APIs: Web Audio API, WebCodecs, Canv
 
 ## License
 
-Copyright (c) 2025 Maksym Shymchenko. All rights reserved over authorship.
+Copyright (c) 2026 Maksym Shymchenko. All rights reserved over authorship.
 
 This track is released under a **custom free-use license** with the following terms:
 

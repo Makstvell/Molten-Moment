@@ -4,20 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Molten Moment</title>
-  <meta name="description" content="An audio-reactive lava lamp visualizer. Load any track, watch organic blobs pulse and rise to the music, then export the full animation as a high-resolution video." />
+  <script src="https://unpkg.com/webm-muxer/build/webm-muxer.min.js"></script>
   <style>
     html, body { margin:0; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
     #canvas { width:100%; height:100%; display:block; }
-
     #ui {
       position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
       display:flex; flex-direction:column; gap:6px; align-items:center;
-      background:rgba(0,0,0,0.68); backdrop-filter:blur(12px);
+      background:rgba(0,0,0,0.72); backdrop-filter:blur(12px);
       border:1px solid rgba(255,255,255,0.1); border-radius:16px;
-      padding:10px 14px; z-index:10; max-width:96vw;
+      padding:10px 16px; z-index:10; max-width:96vw;
     }
     .row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; justify-content:center; }
-
     button, select {
       background:rgba(255,255,255,0.08); color:#ddd;
       border:1px solid rgba(255,255,255,0.15);
@@ -25,10 +23,7 @@
     }
     button:disabled { opacity:0.4; cursor:not-allowed; }
     button:hover:not(:disabled) { background:rgba(255,255,255,0.17); }
-    input[type="range"] {
-      background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);
-      border-radius:8px; padding:4px 8px; font-size:12px;
-    }
+    input[type="range"] { cursor:pointer; accent-color:#ffaa44; }
     input[type="number"] {
       background:rgba(255,255,255,0.08); color:#ddd;
       border:1px solid rgba(255,255,255,0.15); border-radius:6px;
@@ -37,7 +32,7 @@
     input[type="file"] { display:none; }
     #fileBtn { background:rgba(255,255,255,0.08); color:#ddd; border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:5px 11px; cursor:pointer; font-size:12px; }
     #fileBtn:hover { background:rgba(255,255,255,0.17); }
-    #fileName { color:#aaa; font-size:12px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #fileName { color:#aaa; font-size:12px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     label { display:flex; gap:5px; align-items:center; color:#ccc; font-size:12px; }
     .tag { padding:4px 9px; border-radius:6px; background:rgba(255,150,40,0.12);
            border:1px solid rgba(255,150,40,0.25); color:#ffaa44; font-size:11px; white-space:nowrap; }
@@ -45,34 +40,52 @@
     #customRes { display:none; gap:4px; align-items:center; color:#aaa; font-size:12px; }
     #exportFull { border-color:rgba(255,160,50,0.4); color:#ffb850; }
     #exportFull:hover:not(:disabled) { background:rgba(255,160,50,0.15); }
-    #recDot { display:inline-block; width:7px; height:7px; border-radius:50%;
-              background:#ff4444; margin-right:4px; animation:blink 1s infinite; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+    #seekBar { width:160px; }
+    #timeDisp { color:#999; font-size:11px; white-space:nowrap; min-width:72px; }
+    #fromSlider, #toSlider { width:90px; }
+    .tdisp { color:#ffaa44; font-size:11px; min-width:32px; }
+    #progressWrap { display:none; width:220px; }
+    #progressTrack { width:100%; height:4px; background:rgba(255,255,255,0.1); border-radius:2px; overflow:hidden; }
+    #progressBar { height:100%; width:0%; background:#ffaa44; transition:width 0.15s linear; }
+    #progressLabel { color:#aaa; font-size:11px; text-align:center; margin-top:3px; }
   </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 
 <div id="ui">
-  <!-- Row 1: playback -->
   <div class="row">
-    <input id="file" type="file" accept="audio/*" />
+    <input id="file" type="file" accept=".mp3,.wav,.flac,.ogg,.aac,.m4a,.opus,.weba,audio/*" />
     <button id="fileBtn" type="button">&#128193; Choose file</button>
     <span id="fileName">Moment.mp3</span>
-    <button id="play"  disabled>&#9654; Play</button>
-    <button id="pause" disabled>&#9646;&#9646; Pause</button>
-    <span class="tag" id="status">No audio loaded</span>
+    <div class="sep"></div>
+    <button id="play"    disabled>&#9654; Play</button>
+    <button id="pause"   disabled>&#9646;&#9646; Pause</button>
+    <button id="restart" disabled>&#9646;&#9664; Restart</button>
+    <input  id="seekBar" type="range" min="0" max="100" value="0" step="0.1" disabled />
+    <span   id="timeDisp">0:00 / 0:00</span>
     <div class="sep"></div>
     <label>Sens <input id="sens" type="range" min="0.5" max="3" value="0.5" step="0.05"/> <span id="sensVal">0.50</span></label>
     <label>Glow <input id="glow" type="range" min="0" max="1" value="0.3" step="0.01"/> <span id="glowVal">0.30</span></label>
   </div>
 
-  <!-- Row 2: export -->
   <div class="row">
+    <span class="tag" id="status">No audio loaded</span>
+    <div class="sep"></div>
+    <label>From
+      <input id="fromSlider" type="range" min="0" max="100" value="0" step="1" disabled />
+      <span id="fromDisp" class="tdisp">0:00</span>
+    </label>
+    <label>To
+      <input id="toSlider" type="range" min="0" max="100" value="100" step="1" disabled />
+      <span id="toDisp" class="tdisp">0:00</span>
+    </label>
+    <div class="sep"></div>
     <label>Resolution
       <select id="resPreset">
         <option value="720">1280 × 720 (HD)</option>
         <option value="1080" selected>1920 × 1080 (Full HD)</option>
+        <option value="portrait">1080 × 1920 (Portrait)</option>
         <option value="1440">2560 × 1440 (2K)</option>
         <option value="4k">3840 × 2160 (4K)</option>
         <option value="custom">Custom…</option>
@@ -85,90 +98,132 @@
       <span style="color:#666;font-size:11px">px</span>
     </div>
     <div class="sep"></div>
-    <button id="rec"     disabled>&#9210; Record</button>
-    <button id="stopRec" disabled>&#9209; Stop &amp; Save</button>
-    <div class="sep"></div>
-    <button id="exportFull" disabled>&#9654; Export Full Video</button>
+    <button id="exportFull" disabled>&#9654; Export Video</button>
     <span class="tag" id="recInfo">Idle</span>
+  </div>
+
+  <div id="progressWrap">
+    <div id="progressTrack"><div id="progressBar"></div></div>
+    <div id="progressLabel">0%</div>
   </div>
 </div>
 
 <script>
 (() => {
-  // ── Canvas ───────────────────────────────────────────────────────────────────
   const canvas = document.getElementById('canvas');
 
-  // ── Render target factory ────────────────────────────────────────────────────
-  // DS is computed per-target so 4K doesn't kill CPU
+  // ── Render target factory ─────────────────────────────────────────────────
   function targetDS(h) { return Math.max(2, Math.round(h / 380)); }
 
   function createTarget(w, h, outputCanvas) {
-    const ds  = targetDS(h);
-    const pw  = Math.ceil(w / ds);
-    const ph  = Math.ceil(h / ds);
+    const ds = targetDS(h);
+    const pw = Math.ceil(w / ds), ph = Math.ceil(h / ds);
     const out = outputCanvas;
     out.width = w; out.height = h;
     const outCtx = out.getContext('2d', { alpha: false });
-
-    const off    = document.createElement('canvas');
+    const off = document.createElement('canvas');
     off.width = w; off.height = h;
     const offCtx = off.getContext('2d');
-
-    const px   = document.createElement('canvas');
+    const px = document.createElement('canvas');
     px.width = pw; px.height = ph;
-    const pxCtx  = px.getContext('2d', { willReadFrequently: true });
-
+    const pxCtx = px.getContext('2d', { willReadFrequently: true });
     return { w, h, ds, out, outCtx, off, offCtx, px, pxCtx };
   }
 
-  let displayTarget = null; // renders to visible canvas
-  let recordTarget  = null; // renders to hidden canvas (captureStream)
+  let displayTarget = null;
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w   = Math.floor(canvas.clientWidth  * dpr);
-    const h   = Math.floor(canvas.clientHeight * dpr);
-    displayTarget = createTarget(w, h, canvas);
+    displayTarget = createTarget(
+      Math.floor(canvas.clientWidth * dpr),
+      Math.floor(canvas.clientHeight * dpr),
+      canvas
+    );
     resetBlobs();
   }
   window.addEventListener('resize', resize);
 
-  // ── UI wiring ────────────────────────────────────────────────────────────────
-  const fileEl      = document.getElementById('file');
-  const fileBtnEl   = document.getElementById('fileBtn');
-  const fileNameEl  = document.getElementById('fileName');
-  fileBtnEl.addEventListener('click', () => fileEl.click());
-  const playBtn     = document.getElementById('play');
-  const pauseBtn    = document.getElementById('pause');
-  const statusEl    = document.getElementById('status');
-  const sensEl      = document.getElementById('sens');
-  const sensValEl   = document.getElementById('sensVal');
-  const glowEl      = document.getElementById('glow');
-  const glowValEl   = document.getElementById('glowVal');
-  const recBtn      = document.getElementById('rec');
-  const stopRecBtn  = document.getElementById('stopRec');
-  const exportBtn   = document.getElementById('exportFull');
-  const recInfoEl   = document.getElementById('recInfo');
-  const resPreset   = document.getElementById('resPreset');
-  const customResEl = document.getElementById('customRes');
-  const resWEl      = document.getElementById('resW');
-  const resHEl      = document.getElementById('resH');
+  // ── UI elements ───────────────────────────────────────────────────────────
+  const fileEl       = document.getElementById('file');
+  const fileBtnEl    = document.getElementById('fileBtn');
+  const fileNameEl   = document.getElementById('fileName');
+  const playBtn      = document.getElementById('play');
+  const pauseBtn     = document.getElementById('pause');
+  const restartBtn   = document.getElementById('restart');
+  const seekBarEl    = document.getElementById('seekBar');
+  const timeDispEl   = document.getElementById('timeDisp');
+  const statusEl     = document.getElementById('status');
+  const sensEl       = document.getElementById('sens');
+  const sensValEl    = document.getElementById('sensVal');
+  const glowEl       = document.getElementById('glow');
+  const glowValEl    = document.getElementById('glowVal');
+  const fromSlider   = document.getElementById('fromSlider');
+  const fromDisp     = document.getElementById('fromDisp');
+  const toSlider     = document.getElementById('toSlider');
+  const toDisp       = document.getElementById('toDisp');
+  const exportBtn    = document.getElementById('exportFull');
+  const recInfoEl    = document.getElementById('recInfo');
+  const resPreset    = document.getElementById('resPreset');
+  const customResEl  = document.getElementById('customRes');
+  const resWEl       = document.getElementById('resW');
+  const resHEl       = document.getElementById('resH');
+  const progressWrap = document.getElementById('progressWrap');
+  const progressBar  = document.getElementById('progressBar');
+  const progressLbl  = document.getElementById('progressLabel');
 
+  fileBtnEl.addEventListener('click', () => fileEl.click());
   sensEl.addEventListener('input', () => sensValEl.textContent = (+sensEl.value).toFixed(2));
   glowEl.addEventListener('input', () => glowValEl.textContent = (+glowEl.value).toFixed(2));
 
-  const PRESETS = { '720':[1280,720], '1080':[1920,1080], '1440':[2560,1440], '4k':[3840,2160] };
+  const PRESETS = { '720':[1280,720], '1080':[1920,1080], 'portrait':[1080,1920], '1440':[2560,1440], '4k':[3840,2160] };
   resPreset.addEventListener('change', () => {
     const p = PRESETS[resPreset.value];
     customResEl.style.display = p ? 'none' : 'flex';
     if (p) { resWEl.value = p[0]; resHEl.value = p[1]; }
   });
 
-  function getRecordSize() {
-    return [Math.max(100, +resWEl.value), Math.max(100, +resHEl.value)];
+  function getRecordSize() { return [Math.max(100,+resWEl.value), Math.max(100,+resHEl.value)]; }
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   }
 
-  // ── Audio ────────────────────────────────────────────────────────────────────
+  // ── Seek bar ──────────────────────────────────────────────────────────────
+  let seekDragging = false;
+  seekBarEl.addEventListener('mousedown',  () => { seekDragging = true; });
+  seekBarEl.addEventListener('touchstart', () => { seekDragging = true; }, { passive:true });
+  seekBarEl.addEventListener('mouseup',    () => { seekDragging = false; if (audioEl) audioEl.currentTime = +seekBarEl.value; });
+  seekBarEl.addEventListener('touchend',   () => { seekDragging = false; if (audioEl) audioEl.currentTime = +seekBarEl.value; });
+
+  setInterval(() => {
+    if (!audioEl) return;
+    const cur = audioEl.currentTime, dur = audioEl.duration || 0;
+    if (!seekDragging) seekBarEl.value = cur;
+    timeDispEl.textContent = `${fmt(cur)} / ${fmt(dur)}`;
+  }, 250);
+
+  // ── From / To sliders ─────────────────────────────────────────────────────
+  fromSlider.addEventListener('input', () => {
+    if (+fromSlider.value >= +toSlider.value) fromSlider.value = +toSlider.value - 1;
+    fromDisp.textContent = fmt(+fromSlider.value);
+  });
+  toSlider.addEventListener('input', () => {
+    if (+toSlider.value <= +fromSlider.value) toSlider.value = +fromSlider.value + 1;
+    toDisp.textContent = fmt(+toSlider.value);
+  });
+
+  function initTimeControls(duration) {
+    const dur = Math.floor(duration);
+    seekBarEl.max = duration; seekBarEl.value = 0;
+    fromSlider.max = dur; fromSlider.value = 0;
+    toSlider.max = dur; toSlider.value = dur;
+    fromDisp.textContent = '0:00';
+    toDisp.textContent = fmt(dur);
+    seekBarEl.disabled = fromSlider.disabled = toSlider.disabled = false;
+  }
+
+  // ── Audio ─────────────────────────────────────────────────────────────────
   let trackName = 'Moment';
   let audioCtx, audioEl, srcNode, analyser, aBass, aMid, aHigh, freqData;
   let envBass=0, envMid=0, envHigh=0, envFull=0;
@@ -181,8 +236,7 @@
   function rms(a) {
     const arr = new Uint8Array(a.frequencyBinCount);
     a.getByteFrequencyData(arr);
-    let s=0;
-    for (let i=0;i<arr.length;i++) { const v=arr[i]/255; s+=v*v; }
+    let s=0; for (let i=0;i<arr.length;i++){const v=arr[i]/255; s+=v*v;}
     return Math.sqrt(s/arr.length);
   }
 
@@ -191,436 +245,410 @@
     try { srcNode?.disconnect(); } catch {}
     srcNode  = ac.createMediaElementSource(el);
     analyser = ac.createAnalyser(); analyser.fftSize=2048; analyser.smoothingTimeConstant=0.75;
-
     const bF=ac.createBiquadFilter(); bF.type='lowpass';  bF.frequency.value=200;
     const mF=ac.createBiquadFilter(); mF.type='bandpass'; mF.frequency.value=1000; mF.Q.value=0.8;
     const hF=ac.createBiquadFilter(); hF.type='highpass'; hF.frequency.value=3000;
-
     aBass=ac.createAnalyser(); aBass.fftSize=1024; aBass.smoothingTimeConstant=0.6;
-    aMid =ac.createAnalyser(); aMid.fftSize =1024; aMid.smoothingTimeConstant =0.6;
+    aMid =ac.createAnalyser(); aMid.fftSize =1024; aMid.smoothingTimeConstant=0.6;
     aHigh=ac.createAnalyser(); aHigh.fftSize=1024; aHigh.smoothingTimeConstant=0.6;
-
     srcNode.connect(analyser);
     srcNode.connect(bF); bF.connect(aBass);
     srcNode.connect(mF); mF.connect(aMid);
     srcNode.connect(hF); hF.connect(aHigh);
     analyser.connect(ac.destination);
-
     freqData = new Uint8Array(analyser.frequencyBinCount);
-    playBtn.disabled = pauseBtn.disabled = recBtn.disabled = exportBtn.disabled = false;
-    statusEl.textContent = 'Audio ready';
+    playBtn.disabled = pauseBtn.disabled = restartBtn.disabled = exportBtn.disabled = false;
+  }
+
+  function onTrackReady(displayName) {
+    statusEl.textContent = `Loaded: ${displayName}`;
+    const tryInit = () => {
+      if (audioEl.duration && isFinite(audioEl.duration)) initTimeControls(audioEl.duration);
+      else audioEl.addEventListener('durationchange', () => initTimeControls(audioEl.duration), { once:true });
+    };
+    tryInit();
   }
 
   fileEl.addEventListener('change', () => {
     const f = fileEl.files?.[0]; if (!f) return;
     const url = URL.createObjectURL(f);
     if (audioEl) { try{audioEl.pause();}catch{} audioEl.src=''; }
-    audioEl = new Audio();
-    audioEl.crossOrigin = 'anonymous';
-    audioEl.src = url;
+    audioEl = new Audio(); audioEl.crossOrigin='anonymous'; audioEl.src=url;
     audioEl.addEventListener('canplay', () => {
       setupAudio(audioEl);
-      trackName = f.name.replace(/\.[^.]+$/, '');
-      fileNameEl.textContent = f.name;
-      statusEl.textContent = `Loaded: ${f.name}`;
+      trackName = f.name.replace(/\.[^.]+$/,'');
+      fileNameEl.textContent = trackName;
+      onTrackReady(trackName);
     }, { once:true });
-    audioEl.addEventListener('ended', () => { if (!autoRecording) statusEl.textContent='Ended'; });
+    audioEl.addEventListener('ended', () => { statusEl.textContent='Ended'; });
   });
 
-  playBtn.addEventListener('click',  async () => {
+  playBtn.addEventListener('click', async () => {
     const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
     await audioEl?.play(); statusEl.textContent='Playing';
   });
-  pauseBtn.addEventListener('click', () => { audioEl?.pause(); statusEl.textContent='Paused'; });
+  pauseBtn.addEventListener('click',  () => { audioEl?.pause(); statusEl.textContent='Paused'; });
+  restartBtn.addEventListener('click', async () => {
+    if (!audioEl) return;
+    const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
+    audioEl.currentTime=0; await audioEl.play(); statusEl.textContent='Playing';
+  });
 
-  // ── Blobs ────────────────────────────────────────────────────────────────────
+  // ── Blobs ─────────────────────────────────────────────────────────────────
   const BLOB_COUNT = 20;
   const blobs = [];
-
-  function rand(a,b) { return a + Math.random()*(b-a); }
+  function rand(a,b) { return a+Math.random()*(b-a); }
 
   function resetBlobs() {
     blobs.length = 0;
     const W=canvas.width||800, H=canvas.height||600;
-    const minR = Math.min(W,H)*0.05;
-    const maxR = Math.min(W,H)*0.12;
-
-    // Space them out on a grid + jitter so they start spread out
-    const cols = Math.ceil(Math.sqrt(BLOB_COUNT * W/H));
-    const rows = Math.ceil(BLOB_COUNT / cols);
-    const cw   = W / cols, ch = H / rows;
-
+    const minR=Math.min(W,H)*0.05, maxR=Math.min(W,H)*0.12;
+    const cols=Math.ceil(Math.sqrt(BLOB_COUNT*W/H)), rows=Math.ceil(BLOB_COUNT/cols);
+    const cw=W/cols, ch=H/rows;
     let idx=0;
-    for (let r=0; r<rows && idx<BLOB_COUNT; r++) {
-      for (let c=0; c<cols && idx<BLOB_COUNT; c++) {
-        blobs.push({
-          x: cw*(c+0.5) + rand(-cw*0.25, cw*0.25),
-          y: ch*(r+0.5) + rand(-ch*0.25, ch*0.25),
-          vx: rand(-0.3, 0.3),
-          vy: rand(-0.5, 0.5),
-          r:  rand(minR, maxR),
-          heat:  rand(0, 1),
-          phase: rand(0, Math.PI*2),
-          swayFreq: rand(0.3, 0.9),
-        });
-        idx++;
-      }
-    }
+    for (let r=0;r<rows&&idx<BLOB_COUNT;r++)
+      for (let c=0;c<cols&&idx<BLOB_COUNT;c++,idx++)
+        blobs.push({ x:cw*(c+0.5)+rand(-cw*.25,cw*.25), y:ch*(r+0.5)+rand(-ch*.25,ch*.25),
+          vx:rand(-.3,.3), vy:rand(-.5,.5), r:rand(minR,maxR),
+          heat:rand(0,1), phase:rand(0,Math.PI*2), swayFreq:rand(.3,.9) });
   }
 
-  // ── Field ────────────────────────────────────────────────────────────────────
-  function sampleField(px, py, energy) {
-    let field=0, wTotal=0, wHeat=0;
+  // ── Physics step (shared by live tick + offline render) ───────────────────
+  function stepPhysics(dt, kick) {
+    const W=canvas.width||800, H=canvas.height||600;
+    const hot=H*0.15, cold=H*0.15;
     for (const b of blobs) {
-      const dx=px-b.x, dy=py-b.y;
-      const rr = b.r*(0.8+0.65*energy);
-      const d2 = dx*dx+dy*dy+1e-6;
-      const contrib = (rr*rr)/d2;
-      field  += contrib;
-      wTotal += contrib;
-      wHeat  += contrib*b.heat;
+      if (b.y>H-hot)  b.heat=Math.min(1,b.heat+1.8*dt);
+      else if(b.y<cold) b.heat=Math.max(0,b.heat-1.4*dt);
+      b.vy-=(b.heat-0.45)*2.2*70*dt;
+      b.phase+=dt*b.swayFreq;
+      b.vx+=Math.sin(b.phase)*14*dt+Math.sin(b.phase*1.7+1.2)*5*dt;
+      b.vy-=kick*40*dt*b.heat;
+      b.vx+=(Math.random()-.5)*kick*10*dt;
+      const spd=Math.sqrt(b.vx*b.vx+b.vy*b.vy), maxSpd=70+80*kick;
+      if(spd>maxSpd){b.vx*=maxSpd/spd;b.vy*=maxSpd/spd;}
+      const damp=Math.pow(0.88,dt*60); b.vx*=damp; b.vy*=damp;
+      b.x+=b.vx*dt; b.y+=b.vy*dt;
+      if(b.x<-b.r) b.x=W+b.r; if(b.x>W+b.r) b.x=-b.r;
+      if(b.y<-b.r){b.y=-b.r; b.vy=Math.abs(b.vy)*.4; b.heat=0;}
+      if(b.y>H+b.r){b.y=H+b.r; b.vy=-Math.abs(b.vy)*.4; b.heat=1;}
     }
-    return [field, wTotal>0 ? wHeat/wTotal : 0.5];
-  }
-
-  function blobColor(heat, t) {
-    let r,g,b;
-    if (heat < 0.5) {
-      const s=heat*2;
-      r=100+130*s; g=12+68*s; b=5+5*s;
-    } else {
-      const s=(heat-0.5)*2;
-      r=230+25*s; g=80+160*s; b=10+140*s;
-    }
-    r+=(255-r)*t*0.45*heat;
-    g+=(255-g)*t*0.35*heat;
-    return [Math.min(255,r), Math.min(255,g), Math.min(255,b)];
-  }
-
-  // ── Render to target ─────────────────────────────────────────────────────────
-  function renderToTarget(tgt, energy, glow) {
-    const {w, h, ds, outCtx, off, offCtx, px, pxCtx} = tgt;
-    const pw=px.width, ph=px.height;
-
-    const img  = pxCtx.createImageData(pw, ph);
-    const data = img.data;
-    const threshold = 1.05 + 0.85*(1-energy);
-    const softEdge  = threshold*0.45;
-
-    for (let py=0; py<ph; py++) {
-      for (let pxx=0; pxx<pw; pxx++) {
-        const [f, heat] = sampleField(pxx*ds, py*ds, energy);
-        const idx = (py*pw+pxx)*4;
-        if (f >= threshold-softEdge) {
-          const t = Math.max(0, Math.min(1, (f-(threshold-softEdge))/(softEdge*2)));
-          const [r,g,b] = blobColor(heat,t);
-          data[idx]=r; data[idx+1]=g; data[idx+2]=b; data[idx+3]=Math.round(t*255);
-        } else {
-          data[idx+3]=0;
-        }
+    for (let i=0;i<blobs.length;i++)
+      for (let j=i+1;j<blobs.length;j++) {
+        const bi=blobs[i],bj=blobs[j];
+        const dx=bj.x-bi.x, dy=bj.y-bi.y;
+        const dist=Math.sqrt(dx*dx+dy*dy)+0.001, minD=(bi.r+bj.r)*1.9;
+        if(dist<minD){const f=((minD-dist)/minD)*55,nx=dx/dist,ny=dy/dist;
+          bi.vx-=nx*f*dt; bi.vy-=ny*f*dt; bj.vx+=nx*f*dt; bj.vy+=ny*f*dt;}
       }
+  }
+
+  // ── Field & color ─────────────────────────────────────────────────────────
+  function sampleField(px,py,energy){
+    let field=0,wT=0,wH=0;
+    for(const b of blobs){
+      const dx=px-b.x,dy=py-b.y,rr=b.r*(0.8+0.65*energy),d2=dx*dx+dy*dy+1e-6;
+      const c=(rr*rr)/d2; field+=c; wT+=c; wH+=c*b.heat;
     }
+    return [field, wT>0?wH/wT:0.5];
+  }
+
+  function blobColor(heat,t){
+    let r,g,b;
+    if(heat<0.5){const s=heat*2; r=100+130*s;g=12+68*s;b=5+5*s;}
+    else{const s=(heat-.5)*2; r=230+25*s;g=80+160*s;b=10+140*s;}
+    r+=(255-r)*t*0.45*heat; g+=(255-g)*t*0.35*heat;
+    return[Math.min(255,r),Math.min(255,g),Math.min(255,b)];
+  }
+
+  // ── Render to target ──────────────────────────────────────────────────────
+  function renderToTarget(tgt, energy, glow) {
+    const {w,h,ds,outCtx,off,offCtx,px,pxCtx}=tgt;
+    const pw=px.width,ph=px.height;
+    const bW=canvas.width||800, bH=canvas.height||600;
+    const img=pxCtx.createImageData(pw,ph), data=img.data;
+    const thr=1.05+0.85*(1-energy), soft=thr*0.45;
+    for(let piy=0;piy<ph;piy++)
+      for(let pix=0;pix<pw;pix++){
+        const wx=(pix*ds/w)*bW, wy=(piy*ds/h)*bH;
+        const [f,heat]=sampleField(wx,wy,energy);
+        const idx=(piy*pw+pix)*4;
+        if(f>=thr-soft){
+          const t=Math.max(0,Math.min(1,(f-(thr-soft))/(soft*2)));
+          const [r,g,b]=blobColor(heat,t);
+          data[idx]=r;data[idx+1]=g;data[idx+2]=b;data[idx+3]=Math.round(t*255);
+        } else data[idx+3]=0;
+      }
     pxCtx.putImageData(img,0,0);
-
     offCtx.clearRect(0,0,w,h);
-    offCtx.imageSmoothingEnabled=true;
-    offCtx.imageSmoothingQuality='high';
+    offCtx.imageSmoothingEnabled=true; offCtx.imageSmoothingQuality='high';
     offCtx.drawImage(px,0,0,w,h);
-
-    // Background
-    const bg = outCtx.createLinearGradient(0,0,0,h);
-    bg.addColorStop(0,'#040208');
-    bg.addColorStop(0.5,'#080414');
-    bg.addColorStop(1,'#100306');
-    outCtx.fillStyle=bg;
-    outCtx.fillRect(0,0,w,h);
-
-    // Blobs
-    outCtx.save();
-    outCtx.globalCompositeOperation='source-over';
-    outCtx.drawImage(off,0,0);
-
-    // Glow
-    if (glow>0.01) {
+    const bg=outCtx.createLinearGradient(0,0,0,h);
+    bg.addColorStop(0,'#040208'); bg.addColorStop(.5,'#080414'); bg.addColorStop(1,'#100306');
+    outCtx.fillStyle=bg; outCtx.fillRect(0,0,w,h);
+    outCtx.save(); outCtx.globalCompositeOperation='source-over'; outCtx.drawImage(off,0,0);
+    if(glow>0.01){
       outCtx.globalCompositeOperation='lighter';
-      outCtx.filter=`blur(${Math.round(8+14*glow)}px)`;
-      outCtx.globalAlpha=0.55*glow;
-      outCtx.drawImage(off,0,0);
-      outCtx.filter=`blur(${Math.round(22+28*glow)}px)`;
-      outCtx.globalAlpha=0.28*glow;
-      outCtx.drawImage(off,0,0);
-      outCtx.filter=`blur(${Math.round(50+20*glow)}px)`;
-      outCtx.globalAlpha=0.10*glow;
-      outCtx.drawImage(off,0,0);
-      outCtx.filter='none';
-      outCtx.globalAlpha=1;
+      outCtx.filter=`blur(${Math.round(8+14*glow)}px)`; outCtx.globalAlpha=.55*glow; outCtx.drawImage(off,0,0);
+      outCtx.filter=`blur(${Math.round(22+28*glow)}px)`; outCtx.globalAlpha=.28*glow; outCtx.drawImage(off,0,0);
+      outCtx.filter=`blur(${Math.round(50+20*glow)}px)`; outCtx.globalAlpha=.10*glow; outCtx.drawImage(off,0,0);
+      outCtx.filter='none'; outCtx.globalAlpha=1;
     }
     outCtx.restore();
-
-    // Vignette
-    outCtx.save();
-    outCtx.globalCompositeOperation='multiply';
-    const vg=outCtx.createRadialGradient(w*0.5,h*0.5,Math.min(w,h)*0.18, w*0.5,h*0.5,Math.max(w,h)*0.78);
-    vg.addColorStop(0,'rgba(255,255,255,1)');
-    vg.addColorStop(1,'rgba(0,0,0,1)');
-    outCtx.fillStyle=vg;
-    outCtx.fillRect(0,0,w,h);
-    outCtx.restore();
-
-    // Text "Moment"
-    const fontSize = Math.min(w*0.11, h*0.17);
-    const pulse = 1+0.06*envBass;
-    outCtx.save();
-    outCtx.translate(w*0.5, h*0.5);
-    outCtx.scale(pulse, pulse);
-    outCtx.textAlign='center';
-    outCtx.textBaseline='middle';
-    outCtx.font=`300 ${fontSize}px Georgia,'Times New Roman',serif`;
-    // Halo
-    outCtx.shadowColor=`rgba(255,140,30,${0.5+0.3*envBass})`;
-    outCtx.shadowBlur=60+40*envBass;
-    outCtx.fillStyle='rgba(255,230,180,0.12)';
-    outCtx.fillText(trackName,0,0);
-    // Glow
-    outCtx.shadowColor=`rgba(255,200,80,${0.7+0.2*envMid})`;
-    outCtx.shadowBlur=25+15*envMid;
-    outCtx.fillStyle=`rgba(255,245,220,${0.7+0.2*envFull})`;
-    outCtx.fillText(trackName,0,0);
-    // Crisp
-    outCtx.shadowBlur=0;
-    outCtx.fillStyle=`rgba(255,255,252,${0.92+0.08*envFull})`;
-    outCtx.fillText(trackName,0,0);
+    outCtx.save(); outCtx.globalCompositeOperation='multiply';
+    const vg=outCtx.createRadialGradient(w*.5,h*.5,Math.min(w,h)*.18,w*.5,h*.5,Math.max(w,h)*.78);
+    vg.addColorStop(0,'rgba(255,255,255,1)'); vg.addColorStop(1,'rgba(0,0,0,1)');
+    outCtx.fillStyle=vg; outCtx.fillRect(0,0,w,h); outCtx.restore();
+    const fs=Math.min(w*0.11,h*0.17), pulse=1+0.06*envBass;
+    outCtx.save(); outCtx.translate(w*.5,h*.5); outCtx.scale(pulse,pulse);
+    outCtx.textAlign='center'; outCtx.textBaseline='middle';
+    outCtx.font=`300 ${fs}px Georgia,'Times New Roman',serif`;
+    outCtx.shadowColor=`rgba(255,140,30,${.5+.3*envBass})`; outCtx.shadowBlur=60+40*envBass;
+    outCtx.fillStyle='rgba(255,230,180,0.12)'; outCtx.fillText(trackName,0,0);
+    outCtx.shadowColor=`rgba(255,200,80,${.7+.2*envMid})`; outCtx.shadowBlur=25+15*envMid;
+    outCtx.fillStyle=`rgba(255,245,220,${.7+.2*envFull})`; outCtx.fillText(trackName,0,0);
+    outCtx.shadowBlur=0; outCtx.fillStyle=`rgba(255,255,252,${.92+.08*envFull})`; outCtx.fillText(trackName,0,0);
     outCtx.restore();
   }
 
-  // ── Animation loop ───────────────────────────────────────────────────────────
+  // ── Live animation loop ───────────────────────────────────────────────────
   let lastT = performance.now();
-
   function tick(t) {
     requestAnimationFrame(tick);
-    const dt = Math.min(0.05,(t-lastT)/1000);
-    lastT = t;
-
-    const sensitivity = +sensEl.value;
-    const glow        = +glowEl.value;
-
+    const dt=Math.min(0.05,(t-lastT)/1000); lastT=t;
+    const sensitivity=+sensEl.value, glow=+glowEl.value;
     let bass=0,mid=0,high=0,full=0;
-    if (audioCtx && analyser && audioEl && !audioEl.paused) {
+    if(audioCtx&&analyser&&audioEl&&!audioEl.paused){
       bass=rms(aBass); mid=rms(aMid); high=rms(aHigh);
       analyser.getByteFrequencyData(freqData);
-      let s=0;
-      for (let i=0;i<freqData.length;i++){const v=freqData[i]/255;s+=v*v;}
+      let s=0; for(let i=0;i<freqData.length;i++){const v=freqData[i]/255;s+=v*v;}
       full=Math.sqrt(s/freqData.length);
     }
-
     const sm=0.09;
-    envBass=envBass+(bass-envBass)*sm;
-    envMid =envMid +(mid -envMid )*sm;
-    envHigh=envHigh+(high-envHigh)*sm;
-    envFull=envFull+(full-envFull)*sm;
+    envBass+=( bass-envBass)*sm; envMid+=(mid-envMid)*sm;
+    envHigh+=(high-envHigh)*sm; envFull+=(full-envFull)*sm;
+    const kick=Math.min(1,envBass*2.8*sensitivity);
+    const energy=Math.min(1,envFull*2.2*sensitivity);
+    stepPhysics(dt,kick);
+    renderToTarget(displayTarget,energy,glow);
+  }
 
-    const kick   = Math.min(1, envBass*2.8*sensitivity);
-    const energy = Math.min(1, envFull*2.2*sensitivity);
-
-    // ── Blob physics ──
-    const W=canvas.width||800, H=canvas.height||600;
-    const hotZone=H*0.15, coldZone=H*0.15;
-
-    for (const b of blobs) {
-      // Temperature
-      if (b.y > H-hotZone)  b.heat=Math.min(1, b.heat+1.8*dt);
-      else if (b.y < coldZone) b.heat=Math.max(0, b.heat-1.4*dt);
-
-      // Buoyancy
-      const buoyancy=(b.heat-0.45)*2.2;
-      b.vy -= buoyancy*90*dt;
-
-      // Sway
-      b.phase += dt*b.swayFreq;
-      b.vx += Math.sin(b.phase)*22*dt + Math.sin(b.phase*1.7+1.2)*8*dt;
-
-      // Audio
-      b.vy -= kick*60*dt*b.heat;
-      b.vx += (Math.random()-0.5)*kick*40*dt;
-
-      // Speed cap
-      const spd=Math.sqrt(b.vx*b.vx+b.vy*b.vy);
-      const maxSpd=90+150*kick;
-      if (spd>maxSpd){b.vx*=maxSpd/spd; b.vy*=maxSpd/spd;}
-
-      // Damping
-      const damp=Math.pow(0.93, dt*60);
-      b.vx*=damp; b.vy*=damp;
-
-      b.x+=b.vx*dt; b.y+=b.vy*dt;
-
-      if (b.x<-b.r) b.x=W+b.r;
-      if (b.x>W+b.r) b.x=-b.r;
-      if (b.y<-b.r)  {b.y=-b.r;  b.vy=Math.abs(b.vy)*0.4; b.heat=0;}
-      if (b.y>H+b.r) {b.y=H+b.r; b.vy=-Math.abs(b.vy)*0.4; b.heat=1;}
+  // ── FFT helpers for offline analysis ──────────────────────────────────────
+  function computeFFT(samples) {
+    const n=samples.length;
+    const re=new Float32Array(samples), im=new Float32Array(n);
+    for(let i=1,j=0;i<n;i++){
+      let bit=n>>1; for(;j&bit;bit>>=1)j^=bit; j^=bit;
+      if(i<j){let tmp=re[i];re[i]=re[j];re[j]=tmp; tmp=im[i];im[i]=im[j];im[j]=tmp;}
     }
-
-    // ── Blob repulsion (keep blobs spread out) ──
-    for (let i=0; i<blobs.length; i++) {
-      for (let j=i+1; j<blobs.length; j++) {
-        const bi=blobs[i], bj=blobs[j];
-        const dx=bj.x-bi.x, dy=bj.y-bi.y;
-        const dist=Math.sqrt(dx*dx+dy*dy)+0.001;
-        const minDist=(bi.r+bj.r)*1.9;
-        if (dist < minDist) {
-          const force = ((minDist-dist)/minDist) * 55;
-          const nx=dx/dist, ny=dy/dist;
-          bi.vx-=nx*force*dt; bi.vy-=ny*force*dt;
-          bj.vx+=nx*force*dt; bj.vy+=ny*force*dt;
+    for(let len=2;len<=n;len<<=1){
+      const ang=-2*Math.PI/len, wre=Math.cos(ang), wim=Math.sin(ang);
+      for(let i=0;i<n;i+=len){
+        let ure=1,uim=0;
+        for(let k=0;k<(len>>1);k++){
+          const oi=i+k+(len>>1);
+          const tre=re[oi]*ure-im[oi]*uim, tim=re[oi]*uim+im[oi]*ure;
+          re[oi]=re[i+k]-tre; im[oi]=im[i+k]-tim;
+          re[i+k]+=tre; im[i+k]+=tim;
+          const nu=ure*wre-uim*wim; uim=ure*wim+uim*wre; ure=nu;
         }
       }
     }
+    const mag=new Float32Array(n>>1);
+    for(let i=0;i<(n>>1);i++) mag[i]=Math.sqrt(re[i]*re[i]+im[i]*im[i])/n;
+    return mag;
+  }
 
-    // ── Render ──
-    if (recordTarget) {
-      // Render at record resolution, then scale to display
-      renderToTarget(recordTarget, energy, glow);
-      const dctx = canvas.getContext('2d',{alpha:false});
-      dctx.drawImage(recordTarget.out, 0, 0, canvas.width, canvas.height);
-    } else {
-      renderToTarget(displayTarget, energy, glow);
+  function rmsRange(arr,a,b){let s=0; for(let i=a;i<b;i++)s+=arr[i]*arr[i]; return Math.sqrt(s/(b-a));}
+
+  function computeFrameEnergies(audioBuf, startSec, endSec, fps) {
+    const sr=audioBuf.sampleRate;
+    const ch0=audioBuf.getChannelData(0);
+    const ch1=audioBuf.numberOfChannels>1?audioBuf.getChannelData(1):ch0;
+    const N=2048;
+    const bassEnd=Math.max(1,Math.floor(200/sr*N));
+    const midEnd=Math.floor(3000/sr*N);
+    const frameCount=Math.ceil((endSec-startSec)*fps);
+    const win=new Float32Array(N), result=[];
+    for(let fi=0;fi<frameCount;fi++){
+      const center=Math.floor((startSec+fi/fps)*sr);
+      for(let i=0;i<N;i++){
+        const si=center-(N>>1)+i;
+        const s=(si>=0&&si<ch0.length)?(ch0[si]+ch1[si])*.5:0;
+        win[i]=s*(.5-.5*Math.cos(2*Math.PI*i/(N-1)));
+      }
+      const mag=computeFFT(win);
+      result.push({
+        bass:rmsRange(mag,1,bassEnd),
+        mid: rmsRange(mag,bassEnd,midEnd),
+        high:rmsRange(mag,midEnd,mag.length),
+        full:rmsRange(mag,1,mag.length),
+      });
     }
+    return result;
   }
 
-  // ── Recording ────────────────────────────────────────────────────────────────
-  let recorder     = null;
-  let chunks       = [];
-  let autoRecording= false;
-  let audioDestNode= null;
-
-  function getFileName() {
-    const f = fileEl.files?.[0];
-    return f ? f.name.replace(/\.[^.]+$/,'') : 'moment_lava';
-  }
-
-  function pickMime() {
-    const ms=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
-    return ms.find(m=>MediaRecorder.isTypeSupported(m)) || '';
-  }
-
-  function setRecordingUI(active) {
-    recBtn.disabled     =  active;
-    stopRecBtn.disabled = !active;
-    exportBtn.disabled  =  active;
-    resPreset.disabled  =  active;
-    resWEl.disabled     =  active;
-    resHEl.disabled     =  active;
-  }
-
-  function beginRecording(auto) {
-    const [rw, rh] = getRecordSize();
-    const recCanvas = document.createElement('canvas');
-    recordTarget = createTarget(rw, rh, recCanvas);
-
-    const mimeType    = pickMime();
-    const canvasStream = recCanvas.captureStream(60);
-
-    // Audio destination
-    const ac   = ensureAC();
-    audioDestNode = ac.createMediaStreamDestination();
-    try { analyser.disconnect(); } catch {}
-    analyser.connect(ac.destination);
-    analyser.connect(audioDestNode);
-
-    const stream = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...audioDestNode.stream.getAudioTracks(),
-    ]);
-
-    recorder = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
-    chunks   = [];
-    recorder.ondataavailable = e => { if (e.data?.size>0) chunks.push(e.data); };
-
-    recorder.onstart = () => {
-      autoRecording = auto;
-      setRecordingUI(true);
-      const dot = `<span id="recDot"></span>`;
-      recInfoEl.innerHTML = `${dot}${rw}×${rh}${auto ? ' (auto)' : ''}`;
-    };
-
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, {type: mimeType||'video/webm'});
-      const a    = document.createElement('a');
-      a.href     = URL.createObjectURL(blob);
-      a.download = `${getFileName()}_${rw}x${rh}.webm`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 15000);
-
-      recordTarget  = null;
-      autoRecording = false;
-      setRecordingUI(false);
-      recInfoEl.textContent = 'Saved';
-      statusEl.textContent  = 'Ended';
-    };
-
-    recorder.start(1000);
-  }
-
-  // Manual record
-  recBtn.addEventListener('click', async () => {
-    if (!audioEl) return;
-    const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
-    beginRecording(false);
-    if (audioEl.paused) await audioEl.play();
-    statusEl.textContent='Playing (recording)';
-  });
-
-  stopRecBtn.addEventListener('click', () => { recorder?.stop(); });
-
-  // Full export: seek to 0 → record → auto-stop on 'ended'
+  // ── Offline export ────────────────────────────────────────────────────────
   exportBtn.addEventListener('click', async () => {
     if (!audioEl) return;
-    const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
 
-    if (!audioEl.paused) { audioEl.pause(); }
-    audioEl.currentTime = 0;
+    if (typeof VideoEncoder === 'undefined') {
+      recInfoEl.textContent = 'WebCodecs not supported (use Chrome 94+)';
+      return;
+    }
 
-    // Wait for seek to settle, then start
-    await new Promise(r => {
-      audioEl.addEventListener('seeked', r, {once:true});
-      // fallback if already at 0
-      setTimeout(r, 200);
+    const fps=30;
+    const startSec=+fromSlider.value, endSec=+toSlider.value;
+    const [rw,rh]=getRecordSize();
+
+    exportBtn.disabled=true;
+    progressWrap.style.display='block';
+
+    // 1. Decode audio
+    setProgress(0,'Decoding audio…');
+    const arrayBuf=await fetch(audioEl.src).then(r=>r.arrayBuffer());
+    const tmpAC=new AudioContext();
+    const rawBuf=await tmpAC.decodeAudioData(arrayBuf);
+    await tmpAC.close();
+
+    // 2. Resample audio segment to 48 kHz for Opus
+    setProgress(2,'Resampling audio…');
+    const TARGET_SR=48000;
+    const nch=Math.min(2,rawBuf.numberOfChannels);
+    const segDur=endSec-startSec;
+    const offCtxAudio=new OfflineAudioContext(nch,Math.ceil(segDur*TARGET_SR),TARGET_SR);
+    const src=offCtxAudio.createBufferSource(); src.buffer=rawBuf;
+    src.connect(offCtxAudio.destination); src.start(0,startSec,segDur);
+    const resampled=await offCtxAudio.startRendering();
+
+    // 3. Analyse audio per frame
+    setProgress(5,'Analysing audio…');
+    const frameEnergies=computeFrameEnergies(rawBuf,startSec,endSec,fps);
+    const totalFrames=frameEnergies.length;
+
+    // 4. Pick codec
+    let vcodec='vp8', webmVCodec='V_VP8';
+    for(const c of['vp09.00.41.08','vp09.00.10.08']){
+      try{const s=await VideoEncoder.isConfigSupported({codec:c,width:rw,height:rh,bitrate:8e6,framerate:fps});
+        if(s.supported){vcodec=c;webmVCodec='V_VP9';break;}}catch{}
+    }
+
+    // 5. Setup muxer
+    const {Muxer,ArrayBufferTarget}=WebmMuxer;
+    const muxerTarget=new ArrayBufferTarget();
+    const muxer=new Muxer({
+      target:muxerTarget,
+      video:{codec:webmVCodec,width:rw,height:rh,frameRate:fps},
+      audio:{codec:'A_OPUS',sampleRate:TARGET_SR,numberOfChannels:nch},
+      firstTimestampBehavior:'offset',
     });
 
-    beginRecording(true);
-    await audioEl.play();
-    statusEl.textContent='Playing (full export)';
+    const videoChunks=[];
+    const videoEnc=new VideoEncoder({
+      output:(chunk,meta)=>muxer.addVideoChunk(chunk,meta),
+      error:e=>{statusEl.textContent='Video encode error: '+e.message; console.error(e);},
+    });
+    videoEnc.configure({codec:vcodec,width:rw,height:rh,bitrate:8_000_000,framerate:fps,latencyMode:'quality'});
 
-    // Auto-stop when audio ends
-    audioEl.addEventListener('ended', () => {
-      setTimeout(() => recorder?.stop(), 500); // small tail buffer
-    }, {once:true});
+    const audioEnc=new AudioEncoder({
+      output:(chunk,meta)=>muxer.addAudioChunk(chunk,meta),
+      error:e=>{statusEl.textContent='Audio encode error: '+e.message; console.error(e);},
+    });
+    audioEnc.configure({codec:'opus',sampleRate:TARGET_SR,numberOfChannels:nch,bitrate:192_000});
+
+    // 6. Encode audio chunks
+    setProgress(8,'Encoding audio…');
+    const aCh0=resampled.getChannelData(0);
+    const aCh1=nch>1?resampled.getChannelData(1):aCh0;
+    const ACHUNK=8192;
+    for(let i=0;i<resampled.length;i+=ACHUNK){
+      const frames=Math.min(ACHUNK,resampled.length-i);
+      const buf=new Float32Array(frames*nch);
+      for(let j=0;j<frames;j++) buf[j]=aCh0[i+j]||0;
+      if(nch>1) for(let j=0;j<frames;j++) buf[frames+j]=aCh1[i+j]||0;
+      const ad=new AudioData({format:'f32-planar',sampleRate:TARGET_SR,numberOfFrames:frames,
+        numberOfChannels:nch,timestamp:Math.round(i/TARGET_SR*1e6),data:buf});
+      audioEnc.encode(ad); ad.close();
+    }
+
+    // 7. Render video frames
+    const savedBlobs=blobs.map(b=>({...b}));
+    const savedEnv={envBass,envMid,envHigh,envFull};
+    resetBlobs();
+    let oB=0,oM=0,oH=0,oF=0;
+
+    const offCanvas=document.createElement('canvas'); offCanvas.width=rw; offCanvas.height=rh;
+    const offTgt=createTarget(rw,rh,offCanvas);
+
+    for(let fi=0;fi<totalFrames;fi++){
+      const {bass,mid,high,full}=frameEnergies[fi];
+      const sm=0.09;
+      oB+=(bass-oB)*sm; oM+=(mid-oM)*sm; oH+=(high-oH)*sm; oF+=(full-oF)*sm;
+      envBass=oB; envMid=oM; envHigh=oH; envFull=oF;
+      const sensitivity=+sensEl.value;
+      const kick=Math.min(1,oB*2.8*sensitivity);
+      const energy=Math.min(1,oF*2.2*sensitivity);
+      stepPhysics(1/fps,kick);
+      renderToTarget(offTgt,energy,+glowEl.value);
+      const ts=Math.round(fi*1e6/fps);
+      const frame=new VideoFrame(offCanvas,{timestamp:ts,duration:Math.round(1e6/fps)});
+      videoEnc.encode(frame,{keyFrame:fi%60===0});
+      frame.close();
+
+      if(fi%15===0){
+        const pct=Math.round((fi/totalFrames)*85)+10;
+        setProgress(pct,`Rendering ${Math.round(fi/totalFrames*100)}%…`);
+        await new Promise(r=>setTimeout(r,0));
+        // Drain encoder queue if needed
+        if(videoEnc.encodeQueueSize>30) await videoEnc.flush();
+      }
+    }
+
+    // 8. Restore live state
+    blobs.length=0; savedBlobs.forEach(b=>blobs.push({...b}));
+    envBass=savedEnv.envBass; envMid=savedEnv.envMid;
+    envHigh=savedEnv.envHigh; envFull=savedEnv.envFull;
+
+    setProgress(96,'Finalising…');
+    await videoEnc.flush();
+    await audioEnc.flush();
+    muxer.finalize();
+
+    setProgress(99,'Saving…');
+    const blob=new Blob([muxerTarget.buffer],{type:'video/webm'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`${trackName}_${rw}x${rh}.webm`;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),15000);
+
+    setProgress(100,'Done!');
+    setTimeout(()=>{progressWrap.style.display='none';},2000);
+    recInfoEl.textContent='Saved';
+    exportBtn.disabled=false;
   });
 
-  // ── Auto-load Moment.mp3 ─────────────────────────────────────────────────────
-  async function autoLoadMoment() {
-    try {
-      const res  = await fetch('base/Moment.mp3');
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-
-      audioEl = new Audio();
-      audioEl.crossOrigin = 'anonymous';
-      audioEl.src = url;
-      audioEl.preload = 'auto';
-      audioEl.addEventListener('canplay', () => {
-        setupAudio(audioEl);
-        trackName = 'Moment';
-        statusEl.textContent = 'Loaded: Moment.mp3';
-      }, { once: true });
-      audioEl.addEventListener('ended', () => { if (!autoRecording) statusEl.textContent='Ended'; });
-    } catch (e) {
-      // File not available — user can load manually
-    }
+  function setProgress(pct, label) {
+    progressBar.style.width=pct+'%';
+    progressLbl.textContent=label;
+    statusEl.textContent=label;
   }
 
-  // ── Init ─────────────────────────────────────────────────────────────────────
+  // ── Auto-load Moment.mp3 ──────────────────────────────────────────────────
+  async function autoLoadMoment() {
+    try {
+      const res=await fetch('base/Moment.mp3'); if(!res.ok) return;
+      const blob=await res.blob();
+      const url=URL.createObjectURL(blob);
+      audioEl=new Audio(); audioEl.crossOrigin='anonymous';
+      audioEl.src=url; audioEl.preload='auto';
+      audioEl.addEventListener('canplay',()=>{
+        setupAudio(audioEl); trackName='Moment'; onTrackReady('Moment');
+      },{once:true});
+      audioEl.addEventListener('ended',()=>{ statusEl.textContent='Ended'; });
+    } catch(e){}
+  }
+
   resize();
   requestAnimationFrame(tick);
   autoLoadMoment();

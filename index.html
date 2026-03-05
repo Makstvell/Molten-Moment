@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Molten Moment</title>
+  <meta name="description" content="An audio-reactive lava lamp visualizer. Load any track, watch organic blobs pulse and rise to the music, then export the full animation as a high-resolution video." />
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
+    #canvas { width:100%; height:100%; display:block; }
+
+    #ui {
+      position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+      display:flex; flex-direction:column; gap:6px; align-items:center;
+      background:rgba(0,0,0,0.68); backdrop-filter:blur(12px);
+      border:1px solid rgba(255,255,255,0.1); border-radius:16px;
+      padding:10px 14px; z-index:10; max-width:96vw;
+    }
+    .row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; justify-content:center; }
+
+    button, select {
+      background:rgba(255,255,255,0.08); color:#ddd;
+      border:1px solid rgba(255,255,255,0.15);
+      border-radius:8px; padding:5px 11px; cursor:pointer; font-size:12px;
+    }
+    button:disabled { opacity:0.4; cursor:not-allowed; }
+    button:hover:not(:disabled) { background:rgba(255,255,255,0.17); }
+    input[type="range"] {
+      background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);
+      border-radius:8px; padding:4px 8px; font-size:12px;
+    }
+    input[type="number"] {
+      background:rgba(255,255,255,0.08); color:#ddd;
+      border:1px solid rgba(255,255,255,0.15); border-radius:6px;
+      padding:4px 6px; font-size:12px; width:58px; text-align:center;
+    }
+    input[type="file"] { color:#aaa; font-size:12px; }
+    label { display:flex; gap:5px; align-items:center; color:#ccc; font-size:12px; }
+    .tag { padding:4px 9px; border-radius:6px; background:rgba(255,150,40,0.12);
+           border:1px solid rgba(255,150,40,0.25); color:#ffaa44; font-size:11px; white-space:nowrap; }
+    .sep { width:1px; height:18px; background:rgba(255,255,255,0.12); }
+    #customRes { display:none; gap:4px; align-items:center; color:#aaa; font-size:12px; }
+    #exportFull { border-color:rgba(255,160,50,0.4); color:#ffb850; }
+    #exportFull:hover:not(:disabled) { background:rgba(255,160,50,0.15); }
+    #recDot { display:inline-block; width:7px; height:7px; border-radius:50%;
+              background:#ff4444; margin-right:4px; animation:blink 1s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <!-- Row 1: playback -->
+  <div class="row">
+    <input id="file" type="file" accept="audio/*" />
+    <button id="play"  disabled>&#9654; Play</button>
+    <button id="pause" disabled>&#9646;&#9646; Pause</button>
+    <span class="tag" id="status">No audio loaded</span>
+    <div class="sep"></div>
+    <label>Sens <input id="sens" type="range" min="0.5" max="3" value="1.6" step="0.05"/> <span id="sensVal">1.60</span></label>
+    <label>Glow <input id="glow" type="range" min="0" max="1" value="0.85" step="0.01"/> <span id="glowVal">0.85</span></label>
+  </div>
+
+  <!-- Row 2: export -->
+  <div class="row">
+    <label>Resolution
+      <select id="resPreset">
+        <option value="720">1280 × 720 (HD)</option>
+        <option value="1080" selected>1920 × 1080 (Full HD)</option>
+        <option value="1440">2560 × 1440 (2K)</option>
+        <option value="4k">3840 × 2160 (4K)</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </label>
+    <div id="customRes">
+      <input id="resW" type="number" value="1920" min="100" max="7680" />
+      <span style="color:#666">×</span>
+      <input id="resH" type="number" value="1080" min="100" max="4320" />
+      <span style="color:#666;font-size:11px">px</span>
+    </div>
+    <div class="sep"></div>
+    <button id="rec"     disabled>&#9210; Record</button>
+    <button id="stopRec" disabled>&#9209; Stop &amp; Save</button>
+    <div class="sep"></div>
+    <button id="exportFull" disabled>&#9654; Export Full Video</button>
+    <span class="tag" id="recInfo">Idle</span>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ── Canvas ───────────────────────────────────────────────────────────────────
+  const canvas = document.getElementById('canvas');
+
+  // ── Render target factory ────────────────────────────────────────────────────
+  // DS is computed per-target so 4K doesn't kill CPU
+  function targetDS(h) { return Math.max(2, Math.round(h / 380)); }
+
+  function createTarget(w, h, outputCanvas) {
+    const ds  = targetDS(h);
+    const pw  = Math.ceil(w / ds);
+    const ph  = Math.ceil(h / ds);
+    const out = outputCanvas;
+    out.width = w; out.height = h;
+    const outCtx = out.getContext('2d', { alpha: false });
+
+    const off    = document.createElement('canvas');
+    off.width = w; off.height = h;
+    const offCtx = off.getContext('2d');
+
+    const px   = document.createElement('canvas');
+    px.width = pw; px.height = ph;
+    const pxCtx  = px.getContext('2d', { willReadFrequently: true });
+
+    return { w, h, ds, out, outCtx, off, offCtx, px, pxCtx };
+  }
+
+  let displayTarget = null; // renders to visible canvas
+  let recordTarget  = null; // renders to hidden canvas (captureStream)
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w   = Math.floor(canvas.clientWidth  * dpr);
+    const h   = Math.floor(canvas.clientHeight * dpr);
+    displayTarget = createTarget(w, h, canvas);
+    resetBlobs();
+  }
+  window.addEventListener('resize', resize);
+
+  // ── UI wiring ────────────────────────────────────────────────────────────────
+  const fileEl      = document.getElementById('file');
+  const playBtn     = document.getElementById('play');
+  const pauseBtn    = document.getElementById('pause');
+  const statusEl    = document.getElementById('status');
+  const sensEl      = document.getElementById('sens');
+  const sensValEl   = document.getElementById('sensVal');
+  const glowEl      = document.getElementById('glow');
+  const glowValEl   = document.getElementById('glowVal');
+  const recBtn      = document.getElementById('rec');
+  const stopRecBtn  = document.getElementById('stopRec');
+  const exportBtn   = document.getElementById('exportFull');
+  const recInfoEl   = document.getElementById('recInfo');
+  const resPreset   = document.getElementById('resPreset');
+  const customResEl = document.getElementById('customRes');
+  const resWEl      = document.getElementById('resW');
+  const resHEl      = document.getElementById('resH');
+
+  sensEl.addEventListener('input', () => sensValEl.textContent = (+sensEl.value).toFixed(2));
+  glowEl.addEventListener('input', () => glowValEl.textContent = (+glowEl.value).toFixed(2));
+
+  const PRESETS = { '720':[1280,720], '1080':[1920,1080], '1440':[2560,1440], '4k':[3840,2160] };
+  resPreset.addEventListener('change', () => {
+    const p = PRESETS[resPreset.value];
+    customResEl.style.display = p ? 'none' : 'flex';
+    if (p) { resWEl.value = p[0]; resHEl.value = p[1]; }
+  });
+
+  function getRecordSize() {
+    return [Math.max(100, +resWEl.value), Math.max(100, +resHEl.value)];
+  }
+
+  // ── Audio ────────────────────────────────────────────────────────────────────
+  let audioCtx, audioEl, srcNode, analyser, aBass, aMid, aHigh, freqData;
+  let envBass=0, envMid=0, envHigh=0, envFull=0;
+
+  function ensureAC() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return audioCtx;
+  }
+
+  function rms(a) {
+    const arr = new Uint8Array(a.frequencyBinCount);
+    a.getByteFrequencyData(arr);
+    let s=0;
+    for (let i=0;i<arr.length;i++) { const v=arr[i]/255; s+=v*v; }
+    return Math.sqrt(s/arr.length);
+  }
+
+  function setupAudio(el) {
+    const ac = ensureAC();
+    try { srcNode?.disconnect(); } catch {}
+    srcNode  = ac.createMediaElementSource(el);
+    analyser = ac.createAnalyser(); analyser.fftSize=2048; analyser.smoothingTimeConstant=0.75;
+
+    const bF=ac.createBiquadFilter(); bF.type='lowpass';  bF.frequency.value=200;
+    const mF=ac.createBiquadFilter(); mF.type='bandpass'; mF.frequency.value=1000; mF.Q.value=0.8;
+    const hF=ac.createBiquadFilter(); hF.type='highpass'; hF.frequency.value=3000;
+
+    aBass=ac.createAnalyser(); aBass.fftSize=1024; aBass.smoothingTimeConstant=0.6;
+    aMid =ac.createAnalyser(); aMid.fftSize =1024; aMid.smoothingTimeConstant =0.6;
+    aHigh=ac.createAnalyser(); aHigh.fftSize=1024; aHigh.smoothingTimeConstant=0.6;
+
+    srcNode.connect(analyser);
+    srcNode.connect(bF); bF.connect(aBass);
+    srcNode.connect(mF); mF.connect(aMid);
+    srcNode.connect(hF); hF.connect(aHigh);
+    analyser.connect(ac.destination);
+
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    playBtn.disabled = pauseBtn.disabled = recBtn.disabled = exportBtn.disabled = false;
+    statusEl.textContent = 'Audio ready';
+  }
+
+  fileEl.addEventListener('change', () => {
+    const f = fileEl.files?.[0]; if (!f) return;
+    const url = URL.createObjectURL(f);
+    if (audioEl) { try{audioEl.pause();}catch{} audioEl.src=''; }
+    audioEl = new Audio();
+    audioEl.crossOrigin = 'anonymous';
+    audioEl.src = url;
+    audioEl.addEventListener('canplay', () => {
+      setupAudio(audioEl);
+      statusEl.textContent = `Loaded: ${f.name}`;
+    }, { once:true });
+    audioEl.addEventListener('ended', () => { if (!autoRecording) statusEl.textContent='Ended'; });
+  });
+
+  playBtn.addEventListener('click',  async () => {
+    const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
+    await audioEl?.play(); statusEl.textContent='Playing';
+  });
+  pauseBtn.addEventListener('click', () => { audioEl?.pause(); statusEl.textContent='Paused'; });
+
+  // ── Blobs ────────────────────────────────────────────────────────────────────
+  const BLOB_COUNT = 20;
+  const blobs = [];
+
+  function rand(a,b) { return a + Math.random()*(b-a); }
+
+  function resetBlobs() {
+    blobs.length = 0;
+    const W=canvas.width||800, H=canvas.height||600;
+    const minR = Math.min(W,H)*0.05;
+    const maxR = Math.min(W,H)*0.12;
+
+    // Space them out on a grid + jitter so they start spread out
+    const cols = Math.ceil(Math.sqrt(BLOB_COUNT * W/H));
+    const rows = Math.ceil(BLOB_COUNT / cols);
+    const cw   = W / cols, ch = H / rows;
+
+    let idx=0;
+    for (let r=0; r<rows && idx<BLOB_COUNT; r++) {
+      for (let c=0; c<cols && idx<BLOB_COUNT; c++) {
+        blobs.push({
+          x: cw*(c+0.5) + rand(-cw*0.25, cw*0.25),
+          y: ch*(r+0.5) + rand(-ch*0.25, ch*0.25),
+          vx: rand(-0.3, 0.3),
+          vy: rand(-0.5, 0.5),
+          r:  rand(minR, maxR),
+          heat:  rand(0, 1),
+          phase: rand(0, Math.PI*2),
+          swayFreq: rand(0.3, 0.9),
+        });
+        idx++;
+      }
+    }
+  }
+
+  // ── Field ────────────────────────────────────────────────────────────────────
+  function sampleField(px, py, energy) {
+    let field=0, wTotal=0, wHeat=0;
+    for (const b of blobs) {
+      const dx=px-b.x, dy=py-b.y;
+      const rr = b.r*(0.8+0.65*energy);
+      const d2 = dx*dx+dy*dy+1e-6;
+      const contrib = (rr*rr)/d2;
+      field  += contrib;
+      wTotal += contrib;
+      wHeat  += contrib*b.heat;
+    }
+    return [field, wTotal>0 ? wHeat/wTotal : 0.5];
+  }
+
+  function blobColor(heat, t) {
+    let r,g,b;
+    if (heat < 0.5) {
+      const s=heat*2;
+      r=100+130*s; g=12+68*s; b=5+5*s;
+    } else {
+      const s=(heat-0.5)*2;
+      r=230+25*s; g=80+160*s; b=10+140*s;
+    }
+    r+=(255-r)*t*0.45*heat;
+    g+=(255-g)*t*0.35*heat;
+    return [Math.min(255,r), Math.min(255,g), Math.min(255,b)];
+  }
+
+  // ── Render to target ─────────────────────────────────────────────────────────
+  function renderToTarget(tgt, energy, glow) {
+    const {w, h, ds, outCtx, off, offCtx, px, pxCtx} = tgt;
+    const pw=px.width, ph=px.height;
+
+    const img  = pxCtx.createImageData(pw, ph);
+    const data = img.data;
+    const threshold = 1.05 + 0.85*(1-energy);
+    const softEdge  = threshold*0.45;
+
+    for (let py=0; py<ph; py++) {
+      for (let pxx=0; pxx<pw; pxx++) {
+        const [f, heat] = sampleField(pxx*ds, py*ds, energy);
+        const idx = (py*pw+pxx)*4;
+        if (f >= threshold-softEdge) {
+          const t = Math.max(0, Math.min(1, (f-(threshold-softEdge))/(softEdge*2)));
+          const [r,g,b] = blobColor(heat,t);
+          data[idx]=r; data[idx+1]=g; data[idx+2]=b; data[idx+3]=Math.round(t*255);
+        } else {
+          data[idx+3]=0;
+        }
+      }
+    }
+    pxCtx.putImageData(img,0,0);
+
+    offCtx.clearRect(0,0,w,h);
+    offCtx.imageSmoothingEnabled=true;
+    offCtx.imageSmoothingQuality='high';
+    offCtx.drawImage(px,0,0,w,h);
+
+    // Background
+    const bg = outCtx.createLinearGradient(0,0,0,h);
+    bg.addColorStop(0,'#040208');
+    bg.addColorStop(0.5,'#080414');
+    bg.addColorStop(1,'#100306');
+    outCtx.fillStyle=bg;
+    outCtx.fillRect(0,0,w,h);
+
+    // Blobs
+    outCtx.save();
+    outCtx.globalCompositeOperation='source-over';
+    outCtx.drawImage(off,0,0);
+
+    // Glow
+    if (glow>0.01) {
+      outCtx.globalCompositeOperation='lighter';
+      outCtx.filter=`blur(${Math.round(8+14*glow)}px)`;
+      outCtx.globalAlpha=0.55*glow;
+      outCtx.drawImage(off,0,0);
+      outCtx.filter=`blur(${Math.round(22+28*glow)}px)`;
+      outCtx.globalAlpha=0.28*glow;
+      outCtx.drawImage(off,0,0);
+      outCtx.filter=`blur(${Math.round(50+20*glow)}px)`;
+      outCtx.globalAlpha=0.10*glow;
+      outCtx.drawImage(off,0,0);
+      outCtx.filter='none';
+      outCtx.globalAlpha=1;
+    }
+    outCtx.restore();
+
+    // Vignette
+    outCtx.save();
+    outCtx.globalCompositeOperation='multiply';
+    const vg=outCtx.createRadialGradient(w*0.5,h*0.5,Math.min(w,h)*0.18, w*0.5,h*0.5,Math.max(w,h)*0.78);
+    vg.addColorStop(0,'rgba(255,255,255,1)');
+    vg.addColorStop(1,'rgba(0,0,0,1)');
+    outCtx.fillStyle=vg;
+    outCtx.fillRect(0,0,w,h);
+    outCtx.restore();
+
+    // Text "Moment"
+    const fontSize = Math.min(w*0.11, h*0.17);
+    const pulse = 1+0.06*envBass;
+    outCtx.save();
+    outCtx.translate(w*0.5, h*0.5);
+    outCtx.scale(pulse, pulse);
+    outCtx.textAlign='center';
+    outCtx.textBaseline='middle';
+    outCtx.font=`300 ${fontSize}px Georgia,'Times New Roman',serif`;
+    // Halo
+    outCtx.shadowColor=`rgba(255,140,30,${0.5+0.3*envBass})`;
+    outCtx.shadowBlur=60+40*envBass;
+    outCtx.fillStyle='rgba(255,230,180,0.12)';
+    outCtx.fillText('Moment',0,0);
+    // Glow
+    outCtx.shadowColor=`rgba(255,200,80,${0.7+0.2*envMid})`;
+    outCtx.shadowBlur=25+15*envMid;
+    outCtx.fillStyle=`rgba(255,245,220,${0.7+0.2*envFull})`;
+    outCtx.fillText('Moment',0,0);
+    // Crisp
+    outCtx.shadowBlur=0;
+    outCtx.fillStyle=`rgba(255,255,252,${0.92+0.08*envFull})`;
+    outCtx.fillText('Moment',0,0);
+    outCtx.restore();
+  }
+
+  // ── Animation loop ───────────────────────────────────────────────────────────
+  let lastT = performance.now();
+
+  function tick(t) {
+    requestAnimationFrame(tick);
+    const dt = Math.min(0.05,(t-lastT)/1000);
+    lastT = t;
+
+    const sensitivity = +sensEl.value;
+    const glow        = +glowEl.value;
+
+    let bass=0,mid=0,high=0,full=0;
+    if (audioCtx && analyser && audioEl && !audioEl.paused) {
+      bass=rms(aBass); mid=rms(aMid); high=rms(aHigh);
+      analyser.getByteFrequencyData(freqData);
+      let s=0;
+      for (let i=0;i<freqData.length;i++){const v=freqData[i]/255;s+=v*v;}
+      full=Math.sqrt(s/freqData.length);
+    }
+
+    const sm=0.09;
+    envBass=envBass+(bass-envBass)*sm;
+    envMid =envMid +(mid -envMid )*sm;
+    envHigh=envHigh+(high-envHigh)*sm;
+    envFull=envFull+(full-envFull)*sm;
+
+    const kick   = Math.min(1, envBass*2.8*sensitivity);
+    const energy = Math.min(1, envFull*2.2*sensitivity);
+
+    // ── Blob physics ──
+    const W=canvas.width||800, H=canvas.height||600;
+    const hotZone=H*0.15, coldZone=H*0.15;
+
+    for (const b of blobs) {
+      // Temperature
+      if (b.y > H-hotZone)  b.heat=Math.min(1, b.heat+1.8*dt);
+      else if (b.y < coldZone) b.heat=Math.max(0, b.heat-1.4*dt);
+
+      // Buoyancy
+      const buoyancy=(b.heat-0.45)*2.2;
+      b.vy -= buoyancy*90*dt;
+
+      // Sway
+      b.phase += dt*b.swayFreq;
+      b.vx += Math.sin(b.phase)*22*dt + Math.sin(b.phase*1.7+1.2)*8*dt;
+
+      // Audio
+      b.vy -= kick*60*dt*b.heat;
+      b.vx += (Math.random()-0.5)*kick*40*dt;
+
+      // Speed cap
+      const spd=Math.sqrt(b.vx*b.vx+b.vy*b.vy);
+      const maxSpd=90+150*kick;
+      if (spd>maxSpd){b.vx*=maxSpd/spd; b.vy*=maxSpd/spd;}
+
+      // Damping
+      const damp=Math.pow(0.93, dt*60);
+      b.vx*=damp; b.vy*=damp;
+
+      b.x+=b.vx*dt; b.y+=b.vy*dt;
+
+      if (b.x<-b.r) b.x=W+b.r;
+      if (b.x>W+b.r) b.x=-b.r;
+      if (b.y<-b.r)  {b.y=-b.r;  b.vy=Math.abs(b.vy)*0.4; b.heat=0;}
+      if (b.y>H+b.r) {b.y=H+b.r; b.vy=-Math.abs(b.vy)*0.4; b.heat=1;}
+    }
+
+    // ── Blob repulsion (keep blobs spread out) ──
+    for (let i=0; i<blobs.length; i++) {
+      for (let j=i+1; j<blobs.length; j++) {
+        const bi=blobs[i], bj=blobs[j];
+        const dx=bj.x-bi.x, dy=bj.y-bi.y;
+        const dist=Math.sqrt(dx*dx+dy*dy)+0.001;
+        const minDist=(bi.r+bj.r)*1.9;
+        if (dist < minDist) {
+          const force = ((minDist-dist)/minDist) * 55;
+          const nx=dx/dist, ny=dy/dist;
+          bi.vx-=nx*force*dt; bi.vy-=ny*force*dt;
+          bj.vx+=nx*force*dt; bj.vy+=ny*force*dt;
+        }
+      }
+    }
+
+    // ── Render ──
+    if (recordTarget) {
+      // Render at record resolution, then scale to display
+      renderToTarget(recordTarget, energy, glow);
+      const dctx = canvas.getContext('2d',{alpha:false});
+      dctx.drawImage(recordTarget.out, 0, 0, canvas.width, canvas.height);
+    } else {
+      renderToTarget(displayTarget, energy, glow);
+    }
+  }
+
+  // ── Recording ────────────────────────────────────────────────────────────────
+  let recorder     = null;
+  let chunks       = [];
+  let autoRecording= false;
+  let audioDestNode= null;
+
+  function getFileName() {
+    const f = fileEl.files?.[0];
+    return f ? f.name.replace(/\.[^.]+$/,'') : 'moment_lava';
+  }
+
+  function pickMime() {
+    const ms=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    return ms.find(m=>MediaRecorder.isTypeSupported(m)) || '';
+  }
+
+  function setRecordingUI(active) {
+    recBtn.disabled     =  active;
+    stopRecBtn.disabled = !active;
+    exportBtn.disabled  =  active;
+    resPreset.disabled  =  active;
+    resWEl.disabled     =  active;
+    resHEl.disabled     =  active;
+  }
+
+  function beginRecording(auto) {
+    const [rw, rh] = getRecordSize();
+    const recCanvas = document.createElement('canvas');
+    recordTarget = createTarget(rw, rh, recCanvas);
+
+    const mimeType    = pickMime();
+    const canvasStream = recCanvas.captureStream(60);
+
+    // Audio destination
+    const ac   = ensureAC();
+    audioDestNode = ac.createMediaStreamDestination();
+    try { analyser.disconnect(); } catch {}
+    analyser.connect(ac.destination);
+    analyser.connect(audioDestNode);
+
+    const stream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...audioDestNode.stream.getAudioTracks(),
+    ]);
+
+    recorder = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
+    chunks   = [];
+    recorder.ondataavailable = e => { if (e.data?.size>0) chunks.push(e.data); };
+
+    recorder.onstart = () => {
+      autoRecording = auto;
+      setRecordingUI(true);
+      const dot = `<span id="recDot"></span>`;
+      recInfoEl.innerHTML = `${dot}${rw}×${rh}${auto ? ' (auto)' : ''}`;
+    };
+
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, {type: mimeType||'video/webm'});
+      const a    = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
+      a.download = `${getFileName()}_${rw}x${rh}.webm`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 15000);
+
+      recordTarget  = null;
+      autoRecording = false;
+      setRecordingUI(false);
+      recInfoEl.textContent = 'Saved';
+      statusEl.textContent  = 'Ended';
+    };
+
+    recorder.start(1000);
+  }
+
+  // Manual record
+  recBtn.addEventListener('click', async () => {
+    if (!audioEl) return;
+    const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
+    beginRecording(false);
+    if (audioEl.paused) await audioEl.play();
+    statusEl.textContent='Playing (recording)';
+  });
+
+  stopRecBtn.addEventListener('click', () => { recorder?.stop(); });
+
+  // Full export: seek to 0 → record → auto-stop on 'ended'
+  exportBtn.addEventListener('click', async () => {
+    if (!audioEl) return;
+    const ac=ensureAC(); if(ac.state!=='running') await ac.resume();
+
+    if (!audioEl.paused) { audioEl.pause(); }
+    audioEl.currentTime = 0;
+
+    // Wait for seek to settle, then start
+    await new Promise(r => {
+      audioEl.addEventListener('seeked', r, {once:true});
+      // fallback if already at 0
+      setTimeout(r, 200);
+    });
+
+    beginRecording(true);
+    await audioEl.play();
+    statusEl.textContent='Playing (full export)';
+
+    // Auto-stop when audio ends
+    audioEl.addEventListener('ended', () => {
+      setTimeout(() => recorder?.stop(), 500); // small tail buffer
+    }, {once:true});
+  });
+
+  // ── Auto-load Moment.mp3 ─────────────────────────────────────────────────────
+  async function autoLoadMoment() {
+    try {
+      const res  = await fetch('base/Moment.mp3');
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+
+      audioEl = new Audio();
+      audioEl.crossOrigin = 'anonymous';
+      audioEl.src = url;
+      audioEl.preload = 'auto';
+      audioEl.addEventListener('canplay', () => {
+        setupAudio(audioEl);
+        statusEl.textContent = 'Loaded: Moment.mp3';
+      }, { once: true });
+      audioEl.addEventListener('ended', () => { if (!autoRecording) statusEl.textContent='Ended'; });
+    } catch (e) {
+      // File not available — user can load manually
+    }
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────────
+  resize();
+  requestAnimationFrame(tick);
+  autoLoadMoment();
+})();
+</script>
+</body>
+</html>

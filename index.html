@@ -34,7 +34,10 @@
       border:1px solid rgba(255,255,255,0.15); border-radius:6px;
       padding:4px 6px; font-size:12px; width:58px; text-align:center;
     }
-    input[type="file"] { color:#aaa; font-size:12px; }
+    input[type="file"] { display:none; }
+    #fileBtn { background:rgba(255,255,255,0.08); color:#ddd; border:1px solid rgba(255,255,255,0.15); border-radius:8px; padding:5px 11px; cursor:pointer; font-size:12px; }
+    #fileBtn:hover { background:rgba(255,255,255,0.17); }
+    #fileName { color:#aaa; font-size:12px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     label { display:flex; gap:5px; align-items:center; color:#ccc; font-size:12px; }
     .tag { padding:4px 9px; border-radius:6px; background:rgba(255,150,40,0.12);
            border:1px solid rgba(255,150,40,0.25); color:#ffaa44; font-size:11px; white-space:nowrap; }
@@ -54,12 +57,14 @@
   <!-- Row 1: playback -->
   <div class="row">
     <input id="file" type="file" accept="audio/*" />
+    <button id="fileBtn" type="button">&#128193; Choose file</button>
+    <span id="fileName">Moment.mp3</span>
     <button id="play"  disabled>&#9654; Play</button>
     <button id="pause" disabled>&#9646;&#9646; Pause</button>
     <span class="tag" id="status">No audio loaded</span>
     <div class="sep"></div>
-    <label>Sens <input id="sens" type="range" min="0.5" max="3" value="1.6" step="0.05"/> <span id="sensVal">1.60</span></label>
-    <label>Glow <input id="glow" type="range" min="0" max="1" value="0.85" step="0.01"/> <span id="glowVal">0.85</span></label>
+    <label>Sens <input id="sens" type="range" min="0.5" max="3" value="0.5" step="0.05"/> <span id="sensVal">0.50</span></label>
+    <label>Glow <input id="glow" type="range" min="0" max="1" value="0.3" step="0.01"/> <span id="glowVal">0.30</span></label>
   </div>
 
   <!-- Row 2: export -->
@@ -130,6 +135,9 @@
 
   // ── UI wiring ────────────────────────────────────────────────────────────────
   const fileEl      = document.getElementById('file');
+  const fileBtnEl   = document.getElementById('fileBtn');
+  const fileNameEl  = document.getElementById('fileName');
+  fileBtnEl.addEventListener('click', () => fileEl.click());
   const playBtn     = document.getElementById('play');
   const pauseBtn    = document.getElementById('pause');
   const statusEl    = document.getElementById('status');
@@ -161,6 +169,7 @@
   }
 
   // ── Audio ────────────────────────────────────────────────────────────────────
+  let trackName = 'Moment';
   let audioCtx, audioEl, srcNode, analyser, aBass, aMid, aHigh, freqData;
   let envBass=0, envMid=0, envHigh=0, envFull=0;
 
@@ -211,6 +220,8 @@
     audioEl.src = url;
     audioEl.addEventListener('canplay', () => {
       setupAudio(audioEl);
+      trackName = f.name.replace(/\.[^.]+$/, '');
+      fileNameEl.textContent = f.name;
       statusEl.textContent = `Loaded: ${f.name}`;
     }, { once:true });
     audioEl.addEventListener('ended', () => { if (!autoRecording) statusEl.textContent='Ended'; });
@@ -369,16 +380,16 @@
     outCtx.shadowColor=`rgba(255,140,30,${0.5+0.3*envBass})`;
     outCtx.shadowBlur=60+40*envBass;
     outCtx.fillStyle='rgba(255,230,180,0.12)';
-    outCtx.fillText('Moment',0,0);
+    outCtx.fillText(trackName,0,0);
     // Glow
     outCtx.shadowColor=`rgba(255,200,80,${0.7+0.2*envMid})`;
     outCtx.shadowBlur=25+15*envMid;
     outCtx.fillStyle=`rgba(255,245,220,${0.7+0.2*envFull})`;
-    outCtx.fillText('Moment',0,0);
+    outCtx.fillText(trackName,0,0);
     // Crisp
     outCtx.shadowBlur=0;
     outCtx.fillStyle=`rgba(255,255,252,${0.92+0.08*envFull})`;
-    outCtx.fillText('Moment',0,0);
+    outCtx.fillText(trackName,0,0);
     outCtx.restore();
   }
 
@@ -600,6 +611,7 @@
       audioEl.preload = 'auto';
       audioEl.addEventListener('canplay', () => {
         setupAudio(audioEl);
+        trackName = 'Moment';
         statusEl.textContent = 'Loaded: Moment.mp3';
       }, { once: true });
       audioEl.addEventListener('ended', () => { if (!autoRecording) statusEl.textContent='Ended'; });

@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Molten Moment</title>
-  <script src="https://unpkg.com/webm-muxer/build/webm-muxer.min.js"></script>
   <style>
     html, body { margin:0; height:100%; overflow:hidden; background:#000; font-family:system-ui,sans-serif; }
     #canvas { width:100%; height:100%; display:block; }
@@ -526,7 +525,10 @@
     const frameEnergies=computeFrameEnergies(rawBuf,startSec,endSec,fps);
     const totalFrames=frameEnergies.length;
 
-    // 4. Pick codec
+    // 4. Load muxer + pick codec
+    setProgress(9,'Loading muxer…');
+    const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/webm-muxer/+esm');
+
     let vcodec='vp8', webmVCodec='V_VP8';
     for(const c of['vp09.00.41.08','vp09.00.10.08']){
       try{const s=await VideoEncoder.isConfigSupported({codec:c,width:rw,height:rh,bitrate:8e6,framerate:fps});
@@ -534,7 +536,6 @@
     }
 
     // 5. Setup muxer
-    const {Muxer,ArrayBufferTarget}=WebmMuxer;
     const muxerTarget=new ArrayBufferTarget();
     const muxer=new Muxer({
       target:muxerTarget,

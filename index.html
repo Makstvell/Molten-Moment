@@ -96,6 +96,7 @@
     </div>
     <div class="sep"></div>
     <button id="exportFull" disabled>&#9654; Export Video</button>
+    <button id="stopExport" style="display:none;border-color:rgba(255,80,80,0.35);color:#ff9090;">&#9646;&#9646; Stop</button>
     <span class="tag" id="recInfo">Idle</span>
   </div>
   <div id="progressWrap">
@@ -106,12 +107,11 @@
 <script>
 (() => {
 // ── Shared constants (blob reference world) ──────────────────────────────────
-const REF_W = 1920, REF_H = 1080;
-const BLOB_COUNT = 20;
+const REF_W = 1920, REF_H = 1080, BLOB_COUNT = 20, VIZ_BARS = 64;
 
 // ── Worker code (runs export in background) ──────────────────────────────────
 const WORKER_SRC = `
-const REF_W = 1920, REF_H = 1080, BLOB_COUNT = 20;
+const REF_W = 1920, REF_H = 1080, BLOB_COUNT = 20, VIZ_BARS = 64;
 const blobs = [];
 
 function rand(a,b){ return a+Math.random()*(b-a); }
@@ -199,6 +199,103 @@ function computeFFT(samples){
 
 function rmsR(a,s,e){let v=0; for(let i=s;i<e;i++)v+=a[i]*a[i]; return Math.sqrt(v/(e-s));}
 
+function buildViz(norm){
+  const viz=new Float32Array(VIZ_BARS);
+  const logMin=Math.log(1), logMax=Math.log(norm.length-1);
+  for(let b=0;b<VIZ_BARS;b++){
+    const i0=Math.max(1,Math.round(Math.exp(logMin+(logMax-logMin)*b/VIZ_BARS)));
+    const i1=Math.min(norm.length-1,Math.round(Math.exp(logMin+(logMax-logMin)*(b+1)/VIZ_BARS)));
+    let v=0,cnt=0; for(let i=i0;i<=i1;i++){v+=norm[i];cnt++;}
+    viz[b]=cnt>0?v/cnt:0;
+  }
+  return viz;
+}
+
+function drawCircularViz(ctx, w, h, vizData, trackName, srcCanvas, energy){
+  const e=Math.min(1,energy||0);
+  const cx=w/2, cy=h/2;
+  const bars=vizData.length;
+  const R=Math.min(w,h)*0.13;
+  const maxBarH=Math.min(w,h)*0.17;
+  const lineW=Math.max(2.5,(2*Math.PI*R/bars)*0.62);
+  ctx.save();
+  ctx.filter='none'; ctx.shadowBlur=0;
+
+  // 1. Rainbow bars — hue cycles full 360° around the circle
+  ctx.lineCap='round'; ctx.lineWidth=lineW;
+  for(let i=0;i<bars;i++){
+    const angle=(i/bars)*Math.PI*2-Math.PI/2;
+    const v=Math.min(1,vizData[i]);
+    const barH=v*maxBarH; if(barH<1.5) continue;
+    const x1=cx+Math.cos(angle)*(R+lineW*0.5), y1=cy+Math.sin(angle)*(R+lineW*0.5);
+    const x2=cx+Math.cos(angle)*(R+barH),       y2=cy+Math.sin(angle)*(R+barH);
+    const hue=((i/bars)*360+260)%360; // start violet at top, clockwise rainbow
+    ctx.strokeStyle='hsla('+hue+',100%,'+(48+22*v)+'%,'+(0.5+0.5*v)+')';
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+
+  // 2. Outer ring — at inner edge of bars (pink/magenta glow)
+  // Outer ring — deep amber/gold
+  const ringW=Math.max(2,R*0.032);
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2);
+  ctx.lineWidth=ringW;
+  ctx.strokeStyle='rgba(255,160,10,'+(0.65+0.3*e)+')';
+  ctx.shadowColor='rgba(255,140,0,1)';
+  ctx.shadowBlur=Math.round(R*0.16);
+  ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // Inner ring — bright warm orange/yellow (lighter shade)
+  ctx.beginPath(); ctx.arc(cx,cy,R*0.68,0,Math.PI*2);
+  ctx.lineWidth=Math.max(1.5,R*0.022);
+  ctx.strokeStyle='rgba(255,195,70,'+(0.5+0.3*e)+')';
+  ctx.shadowColor='rgba(255,180,50,0.9)';
+  ctx.shadowBlur=Math.round(R*0.12);
+  ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // 4. Orange transparent sphere
+  const Rs=R*0.58;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx,cy,Rs,0,Math.PI*2); ctx.clip();
+
+  // Orange gradient — light from top-left for 3D look
+  const sg=ctx.createRadialGradient(cx-Rs*0.3,cy-Rs*0.35,0, cx+Rs*0.1,cy+Rs*0.1,Rs*1.05);
+  const br=0.6; // base transparency
+  sg.addColorStop(0,   'rgba(255,220,160,'+(br+0.2*e)+')');
+  sg.addColorStop(0.3, 'rgba(255,140,30,'+(br*0.85)+')');
+  sg.addColorStop(0.7, 'rgba(200,80,10,'+(br*0.7)+')');
+  sg.addColorStop(1,   'rgba(120,40,5,'+(br*0.5)+')');
+  ctx.fillStyle=sg; ctx.fillRect(cx-Rs,cy-Rs,Rs*2,Rs*2);
+
+  // Specular highlight
+  const sh=ctx.createRadialGradient(cx-Rs*0.3,cy-Rs*0.35,0,cx-Rs*0.2,cy-Rs*0.25,Rs*0.4);
+  sh.addColorStop(0,'rgba(255,245,220,0.45)');
+  sh.addColorStop(0.5,'rgba(255,200,100,0.08)');
+  sh.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=sh; ctx.fillRect(cx-Rs,cy-Rs,Rs*2,Rs*2);
+
+  ctx.restore(); // end sphere clip
+
+  // Glow around sphere
+  ctx.beginPath(); ctx.arc(cx,cy,Rs,0,Math.PI*2);
+  ctx.lineWidth=Math.max(1,Rs*0.04);
+  ctx.strokeStyle='rgba(255,130,30,'+(0.4+0.4*e)+')';
+  ctx.shadowColor='rgba(255,120,20,1)';
+  ctx.shadowBlur=Math.round(Rs*(0.3+0.3*e));
+  ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // 5. Track name below
+  const textY=cy+R+maxBarH+Math.min(w,h)*0.042;
+  const fs=Math.min(w*0.032,h*0.046);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font='300 '+fs+'px Georgia,serif';
+  ctx.fillStyle='rgba(255,235,200,0.82)';
+  ctx.fillText(trackName,cx,textY);
+  ctx.restore();
+}
+
 // Matches AnalyserNode.getByteFrequencyData() scale:
 // mag → dB → [0,1] using minDecibels=-100, maxDecibels=-30
 function magToNorm(linMag){
@@ -208,12 +305,19 @@ function magToNorm(linMag){
 
 function analyseFrames(ch0, ch1, sr, t0, t1, fps){
   const N=2048;
-  // Correct bin ranges: bin k → frequency k*sr/N
   const be=Math.max(1,Math.floor(200*N/sr));   // ~9 bins @44.1kHz
   const me=Math.floor(3000*N/sr);              // ~139 bins @44.1kHz
   const win=new Float32Array(N), out=[];
-  const SM=0.6;
+  // SM=0.5625 = 0.75^2: 30fps equivalent of live analyser.smoothingTimeConstant=0.75 at 60fps
+  const SM=0.5625;
   let prevSpec=null;
+
+  // Dilution factors: live rms(aBass) = RMS over all 512 bins where ~8 are non-zero (lowpass)
+  // Worker rmsR(norm,1,be) = RMS over only ~8 bins → ~7.5× too large without correction
+  const refBins = N/4; // 512 = aBass.frequencyBinCount (fftSize=1024)
+  const bassF = Math.sqrt((be-1)     / refBins);
+  const midF  = Math.sqrt((me-be)    / refBins);
+  const highF = Math.sqrt((N/2-1-me) / refBins);
 
   function processWindow(centerSample){
     for(let i=0;i<N;i++){
@@ -222,17 +326,18 @@ function analyseFrames(ch0, ch1, sr, t0, t1, fps){
       win[i]=s*(.5-.5*Math.cos(2*Math.PI*i/(N-1)));
     }
     const raw=computeFFT(win);
+    // raw[i] is already normalised by N inside computeFFT (mag/N).
+    // Do NOT multiply by N again — that inflated every value by 2048×,
+    // pushing all dB values 66dB higher and clamping norm to 1.0 constantly.
     const spec=new Float32Array(raw.length);
-    for(let i=0;i<raw.length;i++){
-      const lin=raw[i]*N;
-      spec[i]=prevSpec ? prevSpec[i]*SM+lin*(1-SM) : lin;
-    }
+    for(let i=0;i<raw.length;i++)
+      spec[i]=prevSpec ? prevSpec[i]*SM+raw[i]*(1-SM) : raw[i];
     prevSpec=spec;
     return spec;
   }
 
-  // Warm-up: prime the temporal smoother 2s before t0
-  const wt0=Math.max(0, t0-2);
+  // Warm-up: prime the temporal smoother 4s before t0
+  const wt0=Math.max(0, t0-4);
   const warmFc=Math.ceil((t0-wt0)*fps);
   for(let fi=0;fi<warmFc;fi++) processWindow(Math.floor((wt0+fi/fps)*sr));
 
@@ -243,16 +348,18 @@ function analyseFrames(ch0, ch1, sr, t0, t1, fps){
     const norm=new Float32Array(spec.length);
     for(let i=0;i<spec.length;i++) norm[i]=magToNorm(spec[i]);
     out.push({
-      bass:rmsR(norm,1,be),
-      mid: rmsR(norm,be,me),
-      high:rmsR(norm,me,norm.length),
-      full:rmsR(norm,1,norm.length),
+      // Multiply by correction factor to match live rms(aBass/aMid/aHigh) scale
+      bass: rmsR(norm,1,be)           * bassF,
+      mid:  rmsR(norm,be,me)          * midF,
+      high: rmsR(norm,me,norm.length) * highF,
+      full: rmsR(norm,1,norm.length),  // full: same 1024 bins as live analyser → no correction
+      viz:  buildViz(norm),
     });
   }
   return out;
 }
 
-function renderFrame(outCtx,compCtx,pxCtx,pw,ph,scale,w,h,energy,glow,eB,eM,eF,tn){
+function renderFrame(outCtx,compCtx,pxCtx,pw,ph,scale,w,h,energy,glow,eB,eM,eF,tn,vizData){
   const thr=1.05+0.85*(1-energy), soft=thr*0.45;
   const cx=w/2, cy=h/2;
   const ds=Math.max(2,Math.round(h/380));
@@ -289,16 +396,7 @@ function renderFrame(outCtx,compCtx,pxCtx,pw,ph,scale,w,h,energy,glow,eB,eM,eF,t
   const vg=outCtx.createRadialGradient(w*.5,h*.5,Math.min(w,h)*.18,w*.5,h*.5,Math.max(w,h)*.78);
   vg.addColorStop(0,'rgba(255,255,255,1)'); vg.addColorStop(1,'rgba(0,0,0,1)');
   outCtx.fillStyle=vg; outCtx.fillRect(0,0,w,h); outCtx.restore();
-  const fs=Math.min(w*.11,h*.17);
-  outCtx.save(); outCtx.translate(w*.5,h*.5); outCtx.scale(1+0.06*eB,1+0.06*eB);
-  outCtx.textAlign='center'; outCtx.textBaseline='middle';
-  outCtx.font='300 '+fs+'px Georgia,serif';
-  outCtx.shadowColor='rgba(255,140,30,'+(0.5+0.3*eB)+')'; outCtx.shadowBlur=60+40*eB;
-  outCtx.fillStyle='rgba(255,230,180,0.12)'; outCtx.fillText(tn,0,0);
-  outCtx.shadowColor='rgba(255,200,80,'+(0.7+0.2*eM)+')'; outCtx.shadowBlur=25+15*eM;
-  outCtx.fillStyle='rgba(255,245,220,'+(0.7+0.2*eF)+')'; outCtx.fillText(tn,0,0);
-  outCtx.shadowBlur=0; outCtx.fillStyle='rgba(255,255,252,'+(0.92+0.08*eF)+')'; outCtx.fillText(tn,0,0);
-  outCtx.restore();
+  drawCircularViz(outCtx,w,h,vizData||new Float32Array(VIZ_BARS),tn,compCtx.canvas,energy);
 }
 
 self.onmessage = async (e) => {
@@ -365,15 +463,21 @@ self.onmessage = async (e) => {
     const pxC =new OffscreenCanvas(pw,ph); const pxCtx=pxC.getContext('2d',{willReadFrequently:true});
 
     for(let fi=0;fi<total;fi++){
-      const {bass,mid,high,full}=frames[fi]; const sm=0.09;
+      const {bass,mid,high,full}=frames[fi];
+      // 1-(1-0.09)^2 ≈ 0.172: equivalent of main thread sm=0.09 at 60fps, now at 30fps
+      const sm=0.172;
       eB+=(bass-eB)*sm; eM+=(mid-eM)*sm; eH+=(high-eH)*sm; eF+=(full-eF)*sm;
       const kick=Math.min(1,eB*2.8*sensitivity);
       const energy=Math.min(1,eF*2.2*sensitivity);
       stepPhysics(1/fps, kick);
-      renderFrame(outCtx,cmpCtx,pxCtx,pw,ph,scale,rw,rh,energy,glow,eB,eM,eF,trackName);
+      renderFrame(outCtx,cmpCtx,pxCtx,pw,ph,scale,rw,rh,energy,glow,eB,eM,eF,trackName,frames[fi].viz);
       const ts=Math.round(fi*1e6/fps);
       const frame=new VideoFrame(outC,{timestamp:ts,duration:Math.round(1e6/fps)});
       vEnc.encode(frame,{keyFrame:fi%60===0}); frame.close();
+      if(fi%4===0){
+        const bmp=await createImageBitmap(outC);
+        self.postMessage({type:'preview',bitmap:bmp},[bmp]);
+      }
       if(fi%20===0){
         prog(15+Math.round(fi/total*78), 'Rendering '+Math.round(fi/total*100)+'%...');
         if(vEnc.encodeQueueSize>40) await vEnc.flush();
@@ -432,6 +536,7 @@ const fromDisp    = document.getElementById('fromDisp');
 const toSlider    = document.getElementById('toSlider');
 const toDisp      = document.getElementById('toDisp');
 const exportBtn   = document.getElementById('exportFull');
+const stopExportBtn = document.getElementById('stopExport');
 const recInfoEl   = document.getElementById('recInfo');
 const resPreset   = document.getElementById('resPreset');
 const customResEl = document.getElementById('customRes');
@@ -442,6 +547,14 @@ const progressBar = document.getElementById('progressBar');
 const progressLbl = document.getElementById('progressLabel');
 
 fileBtnEl.addEventListener('click', () => fileEl.click());
+stopExportBtn.addEventListener('click', ()=>{
+  if(activeWorker){ activeWorker.terminate(); activeWorker=null; }
+  progressWrap.style.display='none';
+  recInfoEl.textContent='Stopped';
+  isExporting=false;
+  stopExportBtn.style.display='none';
+  exportBtn.disabled=false;
+});
 sensEl.addEventListener('input', () => sensValEl.textContent=(+sensEl.value).toFixed(2));
 glowEl.addEventListener('input', () => glowValEl.textContent=(+glowEl.value).toFixed(2));
 
@@ -609,6 +722,104 @@ function blobColor(heat,t){
   return[Math.min(255,r),Math.min(255,g),Math.min(255,b)];
 }
 
+// ── Circular visualizer ───────────────────────────────────────────────────────
+function getVizBars(freqData){
+  const n=freqData.length, viz=new Float32Array(VIZ_BARS);
+  const logMin=Math.log(1), logMax=Math.log(n-1);
+  for(let b=0;b<VIZ_BARS;b++){
+    const i0=Math.max(1,Math.round(Math.exp(logMin+(logMax-logMin)*b/VIZ_BARS)));
+    const i1=Math.min(n-1,Math.round(Math.exp(logMin+(logMax-logMin)*(b+1)/VIZ_BARS)));
+    let v=0,cnt=0; for(let i=i0;i<=i1;i++){v+=freqData[i]/255;cnt++;}
+    viz[b]=cnt>0?v/cnt:0;
+  }
+  return viz;
+}
+
+function drawCircularViz(ctx, w, h, vizData, trackName, srcCanvas, energy){
+  const e=Math.min(1,energy||0);
+  const cx=w/2, cy=h/2;
+  const bars=vizData.length;
+  const R=Math.min(w,h)*0.13;
+  const maxBarH=Math.min(w,h)*0.17;
+  const lineW=Math.max(2.5,(2*Math.PI*R/bars)*0.62);
+  ctx.save();
+  ctx.filter='none'; ctx.shadowBlur=0;
+
+  // 1. Rainbow bars — hue cycles full 360° around the circle
+  ctx.lineCap='round'; ctx.lineWidth=lineW;
+  for(let i=0;i<bars;i++){
+    const angle=(i/bars)*Math.PI*2-Math.PI/2;
+    const v=Math.min(1,vizData[i]);
+    const barH=v*maxBarH; if(barH<1.5) continue;
+    const x1=cx+Math.cos(angle)*(R+lineW*0.5), y1=cy+Math.sin(angle)*(R+lineW*0.5);
+    const x2=cx+Math.cos(angle)*(R+barH),       y2=cy+Math.sin(angle)*(R+barH);
+    const hue=((i/bars)*360+260)%360; // start violet at top, clockwise rainbow
+    ctx.strokeStyle='hsla('+hue+',100%,'+(48+22*v)+'%,'+(0.5+0.5*v)+')';
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+
+  // 2. Outer ring — at inner edge of bars (pink/magenta glow)
+  // Outer ring — deep amber/gold
+  const ringW=Math.max(2,R*0.032);
+  ctx.beginPath(); ctx.arc(cx,cy,R,0,Math.PI*2);
+  ctx.lineWidth=ringW;
+  ctx.strokeStyle='rgba(255,160,10,'+(0.65+0.3*e)+')';
+  ctx.shadowColor='rgba(255,140,0,1)';
+  ctx.shadowBlur=Math.round(R*0.16);
+  ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // Inner ring — bright warm orange/yellow (lighter shade)
+  ctx.beginPath(); ctx.arc(cx,cy,R*0.68,0,Math.PI*2);
+  ctx.lineWidth=Math.max(1.5,R*0.022);
+  ctx.strokeStyle='rgba(255,195,70,'+(0.5+0.3*e)+')';
+  ctx.shadowColor='rgba(255,180,50,0.9)';
+  ctx.shadowBlur=Math.round(R*0.12);
+  ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // 4. Orange transparent sphere
+  const Rs=R*0.58;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx,cy,Rs,0,Math.PI*2); ctx.clip();
+
+  // Orange gradient — light from top-left for 3D look
+  const sg=ctx.createRadialGradient(cx-Rs*0.3,cy-Rs*0.35,0, cx+Rs*0.1,cy+Rs*0.1,Rs*1.05);
+  const br=0.6; // base transparency
+  sg.addColorStop(0,   'rgba(255,220,160,'+(br+0.2*e)+')');
+  sg.addColorStop(0.3, 'rgba(255,140,30,'+(br*0.85)+')');
+  sg.addColorStop(0.7, 'rgba(200,80,10,'+(br*0.7)+')');
+  sg.addColorStop(1,   'rgba(120,40,5,'+(br*0.5)+')');
+  ctx.fillStyle=sg; ctx.fillRect(cx-Rs,cy-Rs,Rs*2,Rs*2);
+
+  // Specular highlight
+  const sh=ctx.createRadialGradient(cx-Rs*0.3,cy-Rs*0.35,0,cx-Rs*0.2,cy-Rs*0.25,Rs*0.4);
+  sh.addColorStop(0,'rgba(255,245,220,0.45)');
+  sh.addColorStop(0.5,'rgba(255,200,100,0.08)');
+  sh.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=sh; ctx.fillRect(cx-Rs,cy-Rs,Rs*2,Rs*2);
+
+  ctx.restore(); // end sphere clip
+
+  // Glow around sphere
+  ctx.beginPath(); ctx.arc(cx,cy,Rs,0,Math.PI*2);
+  ctx.lineWidth=Math.max(1,Rs*0.04);
+  ctx.strokeStyle='rgba(255,130,30,'+(0.4+0.4*e)+')';
+  ctx.shadowColor='rgba(255,120,20,1)';
+  ctx.shadowBlur=Math.round(Rs*(0.3+0.3*e));
+  ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // 5. Track name below
+  const textY=cy+R+maxBarH+Math.min(w,h)*0.042;
+  const fs=Math.min(w*0.032,h*0.046);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font='300 '+fs+'px Georgia,serif';
+  ctx.fillStyle='rgba(255,235,200,0.82)';
+  ctx.fillText(trackName,cx,textY);
+  ctx.restore();
+}
+
 // ── Render (main thread — cover scaling from REF space) ───────────────────────
 function renderToTarget(tgt, energy, glow){
   const {w,h,ds,outCtx,off,offCtx,px,pxCtx}=tgt;
@@ -650,20 +861,13 @@ function renderToTarget(tgt, energy, glow){
   const vg=outCtx.createRadialGradient(w*.5,h*.5,Math.min(w,h)*.18,w*.5,h*.5,Math.max(w,h)*.78);
   vg.addColorStop(0,'rgba(255,255,255,1)'); vg.addColorStop(1,'rgba(0,0,0,1)');
   outCtx.fillStyle=vg; outCtx.fillRect(0,0,w,h); outCtx.restore();
-  const fs=Math.min(w*.11,h*.17);
-  outCtx.save(); outCtx.translate(w*.5,h*.5); outCtx.scale(1+0.06*envBass,1+0.06*envBass);
-  outCtx.textAlign='center'; outCtx.textBaseline='middle';
-  outCtx.font='300 '+fs+"px Georgia,'Times New Roman',serif";
-  outCtx.shadowColor='rgba(255,140,30,'+(0.5+0.3*envBass)+')'; outCtx.shadowBlur=60+40*envBass;
-  outCtx.fillStyle='rgba(255,230,180,0.12)'; outCtx.fillText(trackName,0,0);
-  outCtx.shadowColor='rgba(255,200,80,'+(0.7+0.2*envMid)+')'; outCtx.shadowBlur=25+15*envMid;
-  outCtx.fillStyle='rgba(255,245,220,'+(0.7+0.2*envFull)+')'; outCtx.fillText(trackName,0,0);
-  outCtx.shadowBlur=0; outCtx.fillStyle='rgba(255,255,252,'+(0.92+0.08*envFull)+')'; outCtx.fillText(trackName,0,0);
-  outCtx.restore();
+  const viz = freqData ? getVizBars(freqData) : new Float32Array(VIZ_BARS);
+  drawCircularViz(outCtx, w, h, viz, trackName, off, energy);
 }
 
 // ── Live animation ────────────────────────────────────────────────────────────
 let lastT=performance.now();
+let isExporting=false;
 function tick(t){
   requestAnimationFrame(tick);
   const dt=Math.min(0.05,(t-lastT)/1000); lastT=t;
@@ -681,7 +885,7 @@ function tick(t){
   const kick=Math.min(1,envBass*2.8*sensitivity);
   const energy=Math.min(1,envFull*2.2*sensitivity);
   stepPhysics(dt,kick);
-  renderToTarget(displayTarget,energy,glow);
+  if(!isExporting) renderToTarget(displayTarget,energy,glow);
 }
 
 // ── Export (via Web Worker — main thread stays smooth) ────────────────────────
@@ -695,6 +899,7 @@ exportBtn.addEventListener('click', async()=>{
   if(activeWorker){ activeWorker.terminate(); activeWorker=null; }
 
   exportBtn.disabled=true;
+  isExporting=true;
   progressWrap.style.display='block';
 
   const t0=+fromSlider.value, t1=+toSlider.value;
@@ -739,10 +944,31 @@ exportBtn.addEventListener('click', async()=>{
     initEnv: {eB:envBass, eM:envMid, eH:envHigh, eF:envFull},
   }, xfer);
 
+  stopExportBtn.style.display='inline-block';
+  const previewCtx=canvas.getContext('2d');
+
+  function finishExport(){
+    isExporting=false;
+    stopExportBtn.style.display='none';
+    exportBtn.disabled=false;
+    activeWorker=null;
+  }
+
   worker.onmessage = (e) => {
     const d=e.data;
     if(d.type==='progress'){ setProgress(d.pct,d.label); }
-    else if(d.type==='done'){
+    else if(d.type==='preview'){
+      // Letterbox: preserve export aspect ratio with black bars
+      const cw=canvas.width, ch=canvas.height;
+      const bw=d.bitmap.width, bh=d.bitmap.height;
+      const scale=Math.min(cw/bw, ch/bh);
+      const dw=bw*scale, dh=bh*scale;
+      const dx=(cw-dw)/2, dy=(ch-dh)/2;
+      previewCtx.fillStyle='#000';
+      previewCtx.fillRect(0,0,cw,ch);
+      previewCtx.drawImage(d.bitmap,dx,dy,dw,dh);
+      d.bitmap.close();
+    } else if(d.type==='done'){
       setProgress(100,'Saving...');
       const blob=new Blob([d.buffer],{type:'video/webm'});
       const a=document.createElement('a');
@@ -751,17 +977,17 @@ exportBtn.addEventListener('click', async()=>{
       a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),15000);
       recInfoEl.textContent='Saved';
       setTimeout(()=>{ progressWrap.style.display='none'; },2000);
-      exportBtn.disabled=false; activeWorker=null; worker.terminate();
+      worker.terminate(); finishExport();
     } else if(d.type==='error'){
       statusEl.textContent='Error: '+d.message;
       progressWrap.style.display='none';
-      exportBtn.disabled=false; activeWorker=null; worker.terminate();
+      worker.terminate(); finishExport();
     }
   };
   worker.onerror = (e) => {
     statusEl.textContent='Worker error: '+e.message;
     progressWrap.style.display='none';
-    exportBtn.disabled=false; activeWorker=null;
+    finishExport();
   };
 });
 
